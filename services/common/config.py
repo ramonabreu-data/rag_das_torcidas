@@ -32,9 +32,10 @@ def load_clubs(settings: Settings) -> Tuple[List[ClubConfig], List[ClubConfig]]:
         fortaleza = next((c for c in optional if c.id == "fortaleza"), None)
         if fortaleza:
             fortaleza.enabled = True
-            for club in base_clubs:
-                if club.id == settings.fortaleza_replace_club_id:
-                    club.enabled = False
+            if settings.fortaleza_replace_club_id:
+                for club in base_clubs:
+                    if club.id == settings.fortaleza_replace_club_id:
+                        club.enabled = False
             base_clubs.append(fortaleza)
 
     enabled = [c for c in base_clubs if c.enabled]

@@ -39,8 +39,8 @@ class Settings(BaseSettings):
     ingest_user_agent: str = "torcida-news-rag/0.1 (+https://example.com)"
     request_timeout_seconds: int = 12
 
-    enable_fortaleza: bool = False
-    fortaleza_replace_club_id: str = "santos"
+    enable_fortaleza: bool = True
+    fortaleza_replace_club_id: str = ""
 
     api_host: str = "0.0.0.0"
     api_port: int = 8000

@@ -30,8 +30,8 @@ DEFAULT_ARGS = {
 
 with DAG(
     dag_id="torcida_news_ingestion",
-    description="Daily RSS ingestion for futebol clubs",
-    schedule="0 6 * * *",
+    description="Three-times-daily RSS ingestion for futebol clubs",
+    schedule="0 6,14,20 * * *",
     start_date=pendulum.datetime(2025, 1, 1, tz=TZ),
     catchup=False,
     default_args=DEFAULT_ARGS,

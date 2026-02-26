@@ -1,0 +1,68 @@
+clubs:
+  - id: "flamengo"
+    name: "Flamengo"
+    enabled: true
+    keywords: ["flamengo", "mengão", "mengo", "crf", "rubro-negro", "maracanã"]
+    sources_alias_key: "Flamengo"
+
+  - id: "corinthians"
+    name: "Corinthians"
+    enabled: true
+    keywords: ["corinthians", "timão", "timao", "sccp", "alvinegro", "itaquera", "neo quimica arena"]
+    sources_alias_key: "Corinthians"
+
+  - id: "palmeiras"
+    name: "Palmeiras"
+    enabled: true
+    keywords: ["palmeiras", "verdão", "verdao", "sep", "alviverde", "allianz parque"]
+    sources_alias_key: "Palmeiras"
+
+  - id: "sao-paulo"
+    name: "São Paulo"
+    enabled: true
+    keywords: ["são paulo", "sao paulo", "tricolor paulista", "spfc", "morumbi"]
+    sources_alias_key: "SaoPaulo"
+
+  - id: "vasco"
+    name: "Vasco"
+    enabled: true
+    keywords: ["vasco", "vasco da gama", "gigante da colina", "crvg", "são januário", "sao januario"]
+    sources_alias_key: "Vasco"
+
+  - id: "gremio"
+    name: "Grêmio"
+    enabled: true
+    keywords: ["grêmio", "gremio", "imortal", "tricolor gaúcho", "arena do grêmio"]
+    sources_alias_key: "Gremio"
+
+  - id: "cruzeiro"
+    name: "Cruzeiro"
+    enabled: true
+    keywords: ["cruzeiro", "raposa", "cabuloso", "mineirão", "mineirao"]
+    sources_alias_key: "Cruzeiro"
+
+  - id: "atletico-mg"
+    name: "Atlético-MG"
+    enabled: true
+    keywords: ["atlético-mg", "atletico-mg", "galo", "cam", "arena mrvo", "mineirão", "mineirao"]
+    sources_alias_key: "AtleticoMG"
+
+  - id: "bahia"
+    name: "Bahia"
+    enabled: true
+    keywords: ["bahia", "esquadrão", "esquadrao", "tricolor de aço", "fonte nova"]
+    sources_alias_key: "Bahia"
+
+  - id: "santos"
+    name: "Santos"
+    enabled: true
+    keywords: ["santos", "peixe", "alvinegro praiano", "vila belmiro", "sfc"]
+    sources_alias_key: "Santos"
+
+# Opcional (fora do Top 10 Ipsos-Ipec 2025):
+optional_clubs:
+  - id: "fortaleza"
+    name: "Fortaleza"
+    enabled: false
+    keywords: ["fortaleza", "laion", "tricolor do pici", "pici", "castelão", "castelao"]
+    sources_alias_key: "Fortaleza"

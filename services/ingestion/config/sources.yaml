@@ -1,0 +1,72 @@
+sources:
+  - id: "ge"
+    name: "ge.globo"
+    type: "rss"
+    base_score: 1.00
+    rate_limit_rps: 0.8
+    feeds:
+      # Times (exemplos confirmados na central de RSS do GE)
+      # NOTE: Fortaleza não está aqui como exemplo — você pode usar feed geral de futebol + filtro por keywords
+      Flamengo: "https://ge.globo.com/Esportes/Rss/0,,AS0-9865,00.xml"
+      Corinthians: "https://ge.globo.com/Esportes/Rss/0,,AS0-9862,00.xml"
+      SaoPaulo: "https://ge.globo.com/Esportes/Rss/0,,AS0-9875,00.xml"
+      Palmeiras: "https://ge.globo.com/servico/semantica/editorias/plantao/futebol/times/palmeiras/feed.rss"
+      Santos: "https://ge.globo.com/servico/semantica/editorias/plantao/futebol/times/santos/feed.rss"
+      Vasco: "https://ge.globo.com/Esportes/Rss/0,,AS0-9877,00.xml"
+      Cruzeiro: "https://ge.globo.com/Esportes/Rss/0,,AS0-9863,00.xml"
+      AtleticoMG: "https://ge.globo.com/Esportes/Rss/0,,AS0-9859,00.xml"
+      Bahia: "https://ge.globo.com/servico/semantica/editorias/plantao/futebol/times/bahia/feed.rss"
+      FutebolGeral: "https://ge.globo.com/Esportes/Rss/0,,AS0-9825,00.xml"
+
+  - id: "uol"
+    name: "UOL Esporte"
+    type: "rss"
+    base_score: 0.92
+    rate_limit_rps: 0.6
+    feeds:
+      FutebolGeral: "https://esporte.uol.com.br/futebol/ultimas/index.xml"
+      Flamengo: "https://rss.esporte.uol.com.br/futebol/clubes/flamengo.xml"
+      Corinthians: "https://rss.esporte.uol.com.br/futebol/clubes/corinthians.xml"
+      Palmeiras: "https://rss.esporte.uol.com.br/futebol/clubes/palmeiras.xml"
+      SaoPaulo: "https://rss.esporte.uol.com.br/futebol/clubes/saopaulo.xml"
+      Santos: "https://rss.esporte.uol.com.br/futebol/clubes/santos.xml"
+      Vasco: "https://rss.esporte.uol.com.br/futebol/clubes/vasco.xml"
+      Cruzeiro: "https://rss.esporte.uol.com.br/futebol/clubes/cruzeiro.xml"
+      AtleticoMG: "https://rss.esporte.uol.com.br/futebol/clubes/atleticomg.xml"
+      Bahia: "https://rss.esporte.uol.com.br/futebol/clubes/bahia.xml"
+      Fortaleza: "https://rss.esporte.uol.com.br/futebol/clubes/fortaleza.xml"
+
+  - id: "gazeta"
+    name: "Gazeta Esportiva"
+    type: "rss"
+    base_score: 0.90
+    rate_limit_rps: 0.8
+    feeds:
+      # padrão WordPress /feed/ por time
+      Flamengo: "https://www.gazetaesportiva.com/times/flamengo/feed/"
+      Corinthians: "https://www.gazetaesportiva.com/times/corinthians/feed/"
+      SaoPaulo: "https://www.gazetaesportiva.com/times/sao-paulo/feed/"
+      Palmeiras: "https://www.gazetaesportiva.com/times/palmeiras/feed/"
+      Santos: "https://www.gazetaesportiva.com/times/santos/feed/"
+      Vasco: "https://www.gazetaesportiva.com/times/vasco/feed/"
+      Cruzeiro: "https://www.gazetaesportiva.com/times/cruzeiro/feed/"
+      AtleticoMG: "https://www.gazetaesportiva.com/times/atletico-mg/feed/"
+      Bahia: "https://www.gazetaesportiva.com/times/bahia/feed/"
+      Fortaleza: "https://www.gazetaesportiva.com/times/fortaleza/feed/"
+      FutebolGeral: "https://www.gazetaesportiva.com/futebol/feed/"
+
+  - id: "espn"
+    name: "ESPN (Soccer Headlines)"
+    type: "rss"
+    base_score: 0.75
+    rate_limit_rps: 0.5
+    feeds:
+      FutebolGeral: "https://www.espn.com/espn/rss/soccer/news"
+
+  - id: "cnn"
+    name: "CNN Brasil (Esportes S/A tag feed)"
+    type: "rss"
+    base_score: 0.70
+    rate_limit_rps: 0.5
+    feeds:
+      FutebolGeral: "https://www.cnnbrasil.com.br/tudo-sobre/cnn-esportes-s-a/feed/feed/"

@@ -1,0 +1,21 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "article_id": {"type": "keyword"},
+      "chunk_id": {"type": "integer"},
+      "club_id": {"type": "keyword"},
+      "club_name": {"type": "keyword"},
+      "title": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}},
+      "url": {"type": "keyword"},
+      "source_id": {"type": "keyword"},
+      "source_name": {"type": "keyword"},
+      "published_at": {"type": "date"},
+      "text": {"type": "text"},
+      "embedding": {"type": "dense_vector", "dims": 768, "index": false}
+    }
+  }
+}

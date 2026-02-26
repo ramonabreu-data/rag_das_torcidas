@@ -1,0 +1,28 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "club_id": {"type": "keyword"},
+      "club_name": {"type": "keyword"},
+      "title": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}},
+      "title_normalized": {"type": "keyword"},
+      "url": {"type": "keyword"},
+      "url_hash": {"type": "keyword"},
+      "source_id": {"type": "keyword"},
+      "source_name": {"type": "keyword"},
+      "summary": {"type": "text"},
+      "snippet": {"type": "text"},
+      "content_text": {"type": "text"},
+      "published_at": {"type": "date"},
+      "ingested_at": {"type": "date"},
+      "rank_score": {"type": "float"},
+      "keyword_hits": {"type": "keyword"},
+      "is_opinion": {"type": "boolean"},
+      "daily_pick": {"type": "boolean"},
+      "daily_pick_date": {"type": "date", "format": "yyyy-MM-dd"}
+    }
+  }
+}

@@ -1,0 +1,162 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: torcida-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    networks:
+      - torcida-net
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
+    container_name: torcida-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - TZ=${TZ}
+    ports:
+      - "${ELASTIC_PORT:-9200}:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    networks:
+      - torcida-net
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.2
+    container_name: torcida-kibana
+    profiles: ["kibana"]
+    depends_on:
+      - elasticsearch
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - TZ=${TZ}
+    ports:
+      - "${KIBANA_PORT:-5601}:5601"
+    networks:
+      - torcida-net
+
+  airflow-init:
+    build:
+      context: ./airflow
+    container_name: torcida-airflow-init
+    env_file: .env
+    depends_on:
+      - postgres
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES}
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: ${AIRFLOW__CORE__DEFAULT_TIMEZONE}
+      TZ: ${TZ}
+      PYTHONPATH: /opt/airflow/project
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./:/opt/airflow/project
+    user: "${AIRFLOW_UID}:0"
+    command: >
+      bash -c "airflow db init &&
+      airflow users create \
+        --username ${AIRFLOW_ADMIN_USER} \
+        --password ${AIRFLOW_ADMIN_PASSWORD} \
+        --firstname ${AIRFLOW_ADMIN_FIRSTNAME} \
+        --lastname ${AIRFLOW_ADMIN_LASTNAME} \
+        --role Admin \
+        --email ${AIRFLOW_ADMIN_EMAIL} || true"
+    networks:
+      - torcida-net
+
+  airflow-webserver:
+    build:
+      context: ./airflow
+    container_name: torcida-airflow-webserver
+    env_file: .env
+    depends_on:
+      - postgres
+      - airflow-init
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES}
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: ${AIRFLOW__CORE__DEFAULT_TIMEZONE}
+      TZ: ${TZ}
+      PYTHONPATH: /opt/airflow/project
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./:/opt/airflow/project
+    user: "${AIRFLOW_UID}:0"
+    ports:
+      - "${AIRFLOW_WEBSERVER_PORT:-8080}:8080"
+    command: webserver
+    networks:
+      - torcida-net
+
+  airflow-scheduler:
+    build:
+      context: ./airflow
+    container_name: torcida-airflow-scheduler
+    env_file: .env
+    depends_on:
+      - postgres
+      - airflow-init
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES}
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: ${AIRFLOW__CORE__DEFAULT_TIMEZONE}
+      TZ: ${TZ}
+      PYTHONPATH: /opt/airflow/project
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./:/opt/airflow/project
+    user: "${AIRFLOW_UID}:0"
+    command: scheduler
+    networks:
+      - torcida-net
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    container_name: torcida-api
+    env_file: .env
+    depends_on:
+      - elasticsearch
+    ports:
+      - "${API_PORT:-8000}:8000"
+    networks:
+      - torcida-net
+
+  mcp:
+    build:
+      context: .
+      dockerfile: services/mcp/Dockerfile
+    container_name: torcida-mcp
+    env_file: .env
+    depends_on:
+      - elasticsearch
+    ports:
+      - "${MCP_PORT:-7010}:7010"
+    networks:
+      - torcida-net
+
+volumes:
+  airflow_postgres_data:
+  es_data:
+
+networks:
+  torcida-net:
+    driver: bridge

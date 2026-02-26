@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     ingest_recency_weight: float = 0.60
     ingest_user_agent: str = "torcida-news-rag/0.1 (+https://example.com)"
     request_timeout_seconds: int = 12
+    ingest_scrape_max_items: int = 40
 
     enable_fortaleza: bool = True
     fortaleza_replace_club_id: str = ""

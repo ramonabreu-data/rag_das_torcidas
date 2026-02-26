@@ -1,6 +1,6 @@
 # torcida-news-rag
 
-**torcida-news-rag** é um pipeline RSS-first que coleta notícias dos principais clubes brasileiros, deduplica, ranqueia, seleciona as melhores do dia e indexa no Elasticsearch para alimentar uma API de RAG e um servidor MCP.
+**torcida-news-rag** é um pipeline RSS-first (com scraping HTML para o ge.globo) que coleta notícias dos principais clubes brasileiros, deduplica, ranqueia, seleciona as melhores do dia e indexa no Elasticsearch para alimentar uma API de RAG e um servidor MCP.
 
 A ideia é simples e divertida: todo dia o sistema “vira jornalista de plantão”, lê as manchetes mais quentes dos clubes, seleciona o que importa e entrega um briefing pronto para criação de conteúdo (ex.: post no WordPress/Elementor).
 
@@ -9,7 +9,7 @@ A ideia é simples e divertida: todo dia o sistema “vira jornalista de plantã
 ## Visão geral (técnica, mas com coração)
 
 - **5 coletas diárias** (00:30, 06:00, 14:00, 18:00 e 20:00 America/Fortaleza)
-- **RSS-first**: sem scraping pesado
+- **RSS-first**: sem scraping pesado (exceção: ge.globo via scraping leve)
 - **Fallback inteligente**: se o feed do clube falhar, usa `FutebolGeral` do portal + filtro por keywords
 - **Dedup robusto**: URL + título normalizado + similaridade (rapidfuzz >= 92)
 - **Ranking**: recência + score do portal + match de keywords + penalidade para opinião/coluna
@@ -122,10 +122,11 @@ Rel(mcpTools, es, "Query")
 
 ## Lógica da aplicação (o “porquê” do pipeline)
 
-### 1) Coleta (RSS-first)
+### 1) Coleta (RSS-first + ge.globo via scraping)
 - Cada portal possui feeds por clube e/ou um feed geral.
 - Se o feed específico falhar, o sistema usa o feed geral e **filtra por keywords do clube**.
 - O HTML do artigo é baixado **apenas para extrair snippet e texto curto** (limite 6k chars).
+- Para o **ge.globo**, a coleta usa **scraping leve das páginas de clubes** (RSS desatualizado). Se falhar, cai no `FutebolGeral` com filtro por keywords.
 
 ### 2) Deduplicação
 Evita repetição “camuflada” de notícias similares:
@@ -313,23 +314,31 @@ Arquivo: `services/ingestion/config/clubs.yaml`
 
 ### Sources
 Arquivo: `services/ingestion/config/sources.yaml`
-- Feeds pré-configurados por portal
+- Feeds pré-configurados por portal (RSS ou páginas HTML, dependendo do tipo)
 - Fallback automático para feed `FutebolGeral`
 
-### Portais e feeds (RSS)
-Os portais abaixo são os que a coleta usa hoje, com os respectivos feeds:
+### Portais e fontes (RSS/Web)
+Os portais abaixo são os que a coleta usa hoje, com as respectivas fontes:
 
-**ge.globo**
-- Flamengo — https://ge.globo.com/Esportes/Rss/0,,AS0-9865,00.xml
-- Corinthians — https://ge.globo.com/Esportes/Rss/0,,AS0-9862,00.xml
-- SaoPaulo — https://ge.globo.com/Esportes/Rss/0,,AS0-9875,00.xml
-- Palmeiras — https://ge.globo.com/servico/semantica/editorias/plantao/futebol/times/palmeiras/feed.rss
-- Santos — https://ge.globo.com/servico/semantica/editorias/plantao/futebol/times/santos/feed.rss
-- Vasco — https://ge.globo.com/Esportes/Rss/0,,AS0-9877,00.xml
-- Cruzeiro — https://ge.globo.com/Esportes/Rss/0,,AS0-9863,00.xml
-- AtleticoMG — https://ge.globo.com/Esportes/Rss/0,,AS0-9859,00.xml
-- Bahia — https://ge.globo.com/servico/semantica/editorias/plantao/futebol/times/bahia/feed.rss
-- FutebolGeral — https://ge.globo.com/Esportes/Rss/0,,AS0-9825,00.xml
+**ge.globo (web scraping)**
+- Flamengo — https://ge.globo.com/futebol/times/flamengo/
+- Corinthians — https://ge.globo.com/futebol/times/corinthians/
+- SaoPaulo — https://ge.globo.com/futebol/times/sao-paulo/
+- Palmeiras — https://ge.globo.com/futebol/times/palmeiras/
+- Santos — https://ge.globo.com/futebol/times/santos/
+- Vasco — https://ge.globo.com/futebol/times/vasco-da-gama/
+- Cruzeiro — https://ge.globo.com/futebol/times/cruzeiro/
+- AtleticoMG — https://ge.globo.com/futebol/times/atletico-mg/
+- Bahia — https://ge.globo.com/futebol/times/bahia/
+- Gremio — https://ge.globo.com/futebol/times/gremio/
+- Fortaleza — https://ge.globo.com/futebol/times/fortaleza/
+- FutebolGeral — https://ge.globo.com/futebol/
+
+**Como funciona o scraping do ge.globo**
+- O scraper tenta extrair itens via `application/ld+json` e, se necessário, por `<article>`/links na página.
+- Se a página do clube não retornar itens, usa `FutebolGeral` com filtro por keywords do clube.
+- Limite de itens por página: `INGEST_SCRAPE_MAX_ITEMS` (default 40).
+- Se a estrutura do site mudar, ajuste os slugs/URLs em `services/ingestion/config/sources.yaml`.
 
 **UOL Esporte**
 - FutebolGeral — https://esporte.uol.com.br/futebol/ultimas/index.xml
@@ -440,12 +449,12 @@ FORTALEZA_REPLACE_CLUB_ID=
 ## Observações legais e boas práticas
 - Respeito a rate limits e timeouts configuráveis.
 - Conteúdo limitado para evitar riscos de copyright.
-- RSS-first, scraping mínimo (apenas snippet + texto curto).
+- RSS-first, scraping mínimo (apenas snippet + texto curto; scraping leve no ge.globo).
 
 ---
 
 ## Roadmap (ideias futuras)
-- Plugin de scraping avançado (opt-in)
+- Scraping avançado para outros portais (opt-in)
 - Embeddings + reranking
 - Cache por portal
 - Avaliação automática de qualidade de fontes
@@ -461,7 +470,7 @@ FORTALEZA_REPLACE_CLUB_ID=
 ---
 
 ## Glossário rápido
-- **RSS-first**: prioriza feeds RSS antes de qualquer scraping
+- **RSS-first**: prioriza feeds RSS antes de qualquer scraping (exceção: ge.globo usa scraping leve)
 - **RAG**: retrieval-augmented generation (aqui só preparamos contexto)
 - **MCP**: Model Context Protocol, para expor ferramentas ao LLM
 

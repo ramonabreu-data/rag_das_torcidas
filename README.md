@@ -8,7 +8,7 @@ A ideia é simples e divertida: todo dia o sistema “vira jornalista de plantã
 
 ## Visão geral (técnica, mas com coração)
 
-- **3 coletas diárias** (06:00, 14:00 e 20:00 America/Fortaleza)
+- **5 coletas diárias** (00:30, 06:00, 14:00, 18:00 e 20:00 America/Fortaleza)
 - **RSS-first**: sem scraping pesado
 - **Fallback inteligente**: se o feed do clube falhar, usa `FutebolGeral` do portal + filtro por keywords
 - **Dedup robusto**: URL + título normalizado + similaridade (rapidfuzz >= 92)
@@ -24,17 +24,18 @@ A ideia é simples e divertida: todo dia o sistema “vira jornalista de plantã
 
 ```mermaid
 flowchart TD
-  A[Airflow Scheduler 06:00/14:00/20:00] --> B[Ingestion Pipeline]
-  B --> C[RSS Feeds por portal]
-  C --> D[Normalização e Dedup]
-  D --> E[Enriquecimento de conteúdo
-  (snippet + texto curto)]
-  E --> F[Ranking e Ordenação]
-  F --> G[Indexação ES
-  news_articles + news_chunks]
+  A[Airflow Scheduler<br/>00:30 · 06:00 · 14:00 · 18:00 · 20:00] --> B[Ingestion Pipeline]
+  B --> C1[RSS por clube]
+  B --> C2[Fallback: FutebolGeral + keywords]
+  C1 --> D[Normalização + Dedup]
+  C2 --> D
+  D --> E[Enriquecimento<br/>snippet + texto curto]
+  E --> F[Ranking<br/>recência + portal + keywords]
+  F --> G[Elasticsearch<br/>news_articles + news_chunks]
   G --> H[Seleção diária Top 3]
   H --> I[Marca daily_pick]
-  I --> J[API FastAPI / MCP Tools]
+  G --> J[API FastAPI]
+  G --> K[MCP Tools]
 ```
 
 ---
@@ -154,7 +155,8 @@ score = source_base + recency_weight * recency + keyword_boost * hits - opinion_
 
 ### Airflow
 - Orquestra ingestão + seleção diária.
-- Executa 3 vezes ao dia.
+- Executa 5 vezes ao dia.
+- DAGs: `torcida_news_ingestion` (06:00, 14:00, 18:00, 20:00) e `torcida_news_ingestion_0030` (00:30).
 - Usa TaskGroups por clube.
 
 ### Elasticsearch
@@ -327,6 +329,34 @@ Arquivo: `services/ingestion/config/sources.yaml`
    - Airflow UI: http://localhost:8080
    - API: http://localhost:8000
    - MCP: http://localhost:7010
+   - Elasticsearch: http://localhost:9200
+   - Kibana (opcional): http://localhost:5601
+
+---
+
+## Acessar Elasticsearch e Kibana (artigos)
+
+### Elasticsearch (direto)
+Você pode consultar os índices diretamente via REST:
+```bash
+curl -s "http://localhost:9200/_cat/indices?v"
+curl -s "http://localhost:9200/news_articles/_search?size=3"
+```
+
+### Kibana (interface visual)
+O Kibana está como serviço **opcional** no Compose (profile `kibana`).
+
+Para subir com Kibana:
+```bash
+docker compose -f docker-compose.dev-local.yml --profile kibana up -d
+```
+
+Passos para ver artigos:
+1. Acesse http://localhost:5601
+2. Vá em **Discover**
+3. Crie um **Data View** para `news_articles`
+4. Selecione o campo de tempo `published_at`
+5. Explore os documentos e filtre por `club_id`
 
 ---
 
@@ -378,7 +408,7 @@ FORTALEZA_REPLACE_CLUB_ID=
 ## Checklist rápido
 - [ ] `docker compose up` sobe todos os serviços
 - [ ] `GET /health` retorna `status=ok`
-- [ ] DAG `torcida_news_ingestion` aparece no Airflow
+- [ ] DAGs `torcida_news_ingestion` e `torcida_news_ingestion_0030` aparecem no Airflow
 - [ ] Índices `news_articles` e `news_chunks` criados
 
 ---
@@ -389,5 +419,3 @@ FORTALEZA_REPLACE_CLUB_ID=
 - **MCP**: Model Context Protocol, para expor ferramentas ao LLM
 
 ---
-
-Se quiser, posso gerar também um diagrama mais detalhado (nível componente) ou um desenho de arquitetura em C4.

@@ -28,40 +28,56 @@ DEFAULT_ARGS = {
     "max_retry_delay": timedelta(minutes=30),
 }
 
-with DAG(
+def build_dag(dag_id: str, schedule: str, description: str) -> DAG:
+    with DAG(
+        dag_id=dag_id,
+        description=description,
+        schedule=schedule,
+        start_date=pendulum.datetime(2025, 1, 1, tz=TZ),
+        catchup=False,
+        default_args=DEFAULT_ARGS,
+        tags=["rss", "news", "torcida"],
+    ) as dag:
+        start = EmptyOperator(task_id="start")
+        end = EmptyOperator(task_id="end")
+
+        with TaskGroup(group_id="ingest_clubs") as ingest_group:
+            for club in clubs:
+                task_safe = club.id.replace("-", "_")
+                BashOperator(
+                    task_id=f"ingest_{task_safe}",
+                    bash_command=(
+                        "python -m services.ingestion.main "
+                        f"--club {club.id} --mode ingest"
+                    ),
+                    env={"PYTHONPATH": "/opt/airflow/project"},
+                )
+
+        with TaskGroup(group_id="select_daily_picks") as select_group:
+            for club in clubs:
+                task_safe = club.id.replace("-", "_")
+                BashOperator(
+                    task_id=f"select_{task_safe}",
+                    bash_command=(
+                        "python -m services.ingestion.main "
+                        f"--club {club.id} --mode select --date {{ ds }}"
+                    ),
+                    env={"PYTHONPATH": "/opt/airflow/project"},
+                )
+
+        start >> ingest_group >> select_group >> end
+
+    return dag
+
+
+dag = build_dag(
     dag_id="torcida_news_ingestion",
-    description="Three-times-daily RSS ingestion for futebol clubs",
-    schedule="0 6,14,20 * * *",
-    start_date=pendulum.datetime(2025, 1, 1, tz=TZ),
-    catchup=False,
-    default_args=DEFAULT_ARGS,
-    tags=["rss", "news", "torcida"],
-) as dag:
-    start = EmptyOperator(task_id="start")
-    end = EmptyOperator(task_id="end")
+    schedule="0 6,14,18,20 * * *",
+    description="RSS ingestion (06:00, 14:00, 18:00, 20:00)",
+)
 
-    with TaskGroup(group_id="ingest_clubs") as ingest_group:
-        for club in clubs:
-            task_safe = club.id.replace("-", "_")
-            BashOperator(
-                task_id=f"ingest_{task_safe}",
-                bash_command=(
-                    "python -m services.ingestion.main "
-                    f"--club {club.id} --mode ingest"
-                ),
-                env={"PYTHONPATH": "/opt/airflow/project"},
-            )
-
-    with TaskGroup(group_id="select_daily_picks") as select_group:
-        for club in clubs:
-            task_safe = club.id.replace("-", "_")
-            BashOperator(
-                task_id=f"select_{task_safe}",
-                bash_command=(
-                    "python -m services.ingestion.main "
-                    f"--club {club.id} --mode select --date {{ ds }}"
-                ),
-                env={"PYTHONPATH": "/opt/airflow/project"},
-            )
-
-    start >> ingest_group >> select_group >> end
+dag_0030 = build_dag(
+    dag_id="torcida_news_ingestion_0030",
+    schedule="30 0 * * *",
+    description="RSS ingestion (00:30)",
+)

@@ -18,7 +18,11 @@ setup_logging(settings.log_level)
 
 es = get_es_client(settings)
 
-mcp = FastMCP("torcida-news-rag")
+mcp = FastMCP(
+    "torcida-news-rag",
+    host=settings.mcp_host,
+    port=settings.mcp_port,
+)
 
 
 @mcp.tool()
@@ -47,4 +51,4 @@ def get_article(url: str) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    mcp.run(host=settings.mcp_host, port=settings.mcp_port)
+    mcp.run(transport="sse")

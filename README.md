@@ -316,6 +316,53 @@ Arquivo: `services/ingestion/config/sources.yaml`
 - Feeds pré-configurados por portal
 - Fallback automático para feed `FutebolGeral`
 
+### Portais e feeds (RSS)
+Os portais abaixo são os que a coleta usa hoje, com os respectivos feeds:
+
+**ge.globo**
+- Flamengo — https://ge.globo.com/Esportes/Rss/0,,AS0-9865,00.xml
+- Corinthians — https://ge.globo.com/Esportes/Rss/0,,AS0-9862,00.xml
+- SaoPaulo — https://ge.globo.com/Esportes/Rss/0,,AS0-9875,00.xml
+- Palmeiras — https://ge.globo.com/servico/semantica/editorias/plantao/futebol/times/palmeiras/feed.rss
+- Santos — https://ge.globo.com/servico/semantica/editorias/plantao/futebol/times/santos/feed.rss
+- Vasco — https://ge.globo.com/Esportes/Rss/0,,AS0-9877,00.xml
+- Cruzeiro — https://ge.globo.com/Esportes/Rss/0,,AS0-9863,00.xml
+- AtleticoMG — https://ge.globo.com/Esportes/Rss/0,,AS0-9859,00.xml
+- Bahia — https://ge.globo.com/servico/semantica/editorias/plantao/futebol/times/bahia/feed.rss
+- FutebolGeral — https://ge.globo.com/Esportes/Rss/0,,AS0-9825,00.xml
+
+**UOL Esporte**
+- FutebolGeral — https://esporte.uol.com.br/futebol/ultimas/index.xml
+- Flamengo — https://rss.esporte.uol.com.br/futebol/clubes/flamengo.xml
+- Corinthians — https://rss.esporte.uol.com.br/futebol/clubes/corinthians.xml
+- Palmeiras — https://rss.esporte.uol.com.br/futebol/clubes/palmeiras.xml
+- SaoPaulo — https://rss.esporte.uol.com.br/futebol/clubes/saopaulo.xml
+- Santos — https://rss.esporte.uol.com.br/futebol/clubes/santos.xml
+- Vasco — https://rss.esporte.uol.com.br/futebol/clubes/vasco.xml
+- Cruzeiro — https://rss.esporte.uol.com.br/futebol/clubes/cruzeiro.xml
+- AtleticoMG — https://rss.esporte.uol.com.br/futebol/clubes/atleticomg.xml
+- Bahia — https://rss.esporte.uol.com.br/futebol/clubes/bahia.xml
+- Fortaleza — https://rss.esporte.uol.com.br/futebol/clubes/fortaleza.xml
+
+**Gazeta Esportiva**
+- Flamengo — https://www.gazetaesportiva.com/times/flamengo/feed/
+- Corinthians — https://www.gazetaesportiva.com/times/corinthians/feed/
+- SaoPaulo — https://www.gazetaesportiva.com/times/sao-paulo/feed/
+- Palmeiras — https://www.gazetaesportiva.com/times/palmeiras/feed/
+- Santos — https://www.gazetaesportiva.com/times/santos/feed/
+- Vasco — https://www.gazetaesportiva.com/times/vasco/feed/
+- Cruzeiro — https://www.gazetaesportiva.com/times/cruzeiro/feed/
+- AtleticoMG — https://www.gazetaesportiva.com/times/atletico-mg/feed/
+- Bahia — https://www.gazetaesportiva.com/times/bahia/feed/
+- Fortaleza — https://www.gazetaesportiva.com/times/fortaleza/feed/
+- FutebolGeral — https://www.gazetaesportiva.com/futebol/feed/
+
+**ESPN (Soccer Headlines)**
+- FutebolGeral — https://www.espn.com/espn/rss/soccer/news
+
+**CNN Brasil (Esportes S/A tag feed)**
+- FutebolGeral — https://www.cnnbrasil.com.br/tudo-sobre/cnn-esportes-s-a/feed/feed/
+
 ---
 
 ## Como subir

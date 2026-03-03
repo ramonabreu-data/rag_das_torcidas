@@ -60,7 +60,7 @@ def build_dag(dag_id: str, schedule: str, description: str) -> DAG:
                     task_id=f"select_{task_safe}",
                     bash_command=(
                         "python -m services.ingestion.main "
-                        f"--club {club.id} --mode select --date {{ ds }}"
+                        f"--club {club.id} --mode select --date {{{{ ds }}}}"
                     ),
                     env={"PYTHONPATH": "/opt/airflow/project"},
                 )

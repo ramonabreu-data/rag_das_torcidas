@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Iterable, List, Optional
@@ -19,6 +20,22 @@ from services.common.utils import clean_text, find_keywords, normalize_text
 logger = logging.getLogger("ingestion.rss")
 
 OPINION_TERMS = ["opinião", "opiniao", "coluna", "editorial", "blog", "análise", "analise"]
+
+SOURCE_URL_PATTERNS: dict[str, list[re.Pattern[str]]] = {
+    "cnn": [re.compile(r"^/esportes/futebol/")],
+    "uol": [
+        re.compile(r"^/esporte/futebol/"),
+        re.compile(r"^/esporte/ultimas-noticias/"),
+    ],
+    "gazeta": [
+        re.compile(r"^/times/"),
+        re.compile(r"^/futebol/"),
+        re.compile(r"^/campeonatos/"),
+        re.compile(r"^/todas-as-noticias/"),
+    ],
+    "espn": [re.compile(r"^/futebol/")],
+    "ge": [re.compile(r"/futebol/")],
+}
 
 
 class RateLimiter:
@@ -65,6 +82,18 @@ def _parse_datetime(value: str | None) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _parse_start_date(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = date_parser.parse(value)
+    except Exception:  # noqa: BLE001
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _is_allowed_url(url: str, base_url: str) -> bool:
     try:
         base_host = urlparse(base_url).netloc
@@ -74,6 +103,14 @@ def _is_allowed_url(url: str, base_url: str) -> bool:
         return target_host == base_host or target_host.endswith(f".{base_host}")
     except Exception:  # noqa: BLE001
         return False
+
+
+def _is_relevant_for_source(source_id: str, url: str) -> bool:
+    patterns = SOURCE_URL_PATTERNS.get(source_id)
+    if not patterns:
+        return True
+    path = urlparse(url).path.lower()
+    return any(pattern.search(path) for pattern in patterns)
 
 
 def _normalize_jsonld_item(item: dict, base_url: str) -> dict | None:
@@ -234,6 +271,8 @@ def fetch_page(
             continue
         if not _is_allowed_url(url, page_url):
             continue
+        if not _is_relevant_for_source(source.id, url):
+            continue
         seen_urls.add(url)
         title = clean_text(item.get("title") or "")
         if not title:
@@ -337,6 +376,7 @@ def build_candidates(
     rate_limiter: RateLimiter,
 ) -> List[ArticleCandidate]:
     candidates: List[ArticleCandidate] = []
+    start_date = _parse_start_date(settings.ingest_start_date)
     for source in sources:
         feed_url = source.feeds.get(club.sources_alias_key)
         fallback_url = source.feeds.get("FutebolGeral")
@@ -363,6 +403,9 @@ def build_candidates(
             logger.info("no_feed_items", extra={"source": source.id, "club": club.id})
 
         for item in items:
+            published_at = item["published_at"]
+            if start_date and published_at < start_date:
+                continue
             candidates.append(
                 ArticleCandidate(
                     club_id=club.id,
@@ -374,7 +417,7 @@ def build_candidates(
                     title=item["title"],
                     url=item["url"],
                     summary=item["summary"],
-                    published_at=item["published_at"],
+                    published_at=published_at,
                 )
             )
 

@@ -32,7 +32,6 @@ services:
   kibana:
     image: docker.elastic.co/kibana/kibana:8.12.2
     container_name: torcida-kibana
-    profiles: ["kibana"]
     depends_on:
       - elasticsearch
     environment:
@@ -64,14 +63,13 @@ services:
       - ./:/opt/airflow/project
     user: "${AIRFLOW_UID}:0"
     command: >
-      bash -c "airflow db init &&
-      airflow users create \
-        --username ${AIRFLOW_ADMIN_USER} \
-        --password ${AIRFLOW_ADMIN_PASSWORD} \
-        --firstname ${AIRFLOW_ADMIN_FIRSTNAME} \
-        --lastname ${AIRFLOW_ADMIN_LASTNAME} \
-        --role Admin \
-        --email ${AIRFLOW_ADMIN_EMAIL} || true"
+      bash -lc "airflow db init &&
+      airflow users create --username ${AIRFLOW_ADMIN_USER}
+      --password ${AIRFLOW_ADMIN_PASSWORD}
+      --firstname ${AIRFLOW_ADMIN_FIRSTNAME}
+      --lastname ${AIRFLOW_ADMIN_LASTNAME}
+      --role Admin
+      --email ${AIRFLOW_ADMIN_EMAIL} || true"
     networks:
       - torcida-net
 

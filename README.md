@@ -1,6 +1,6 @@
 # torcida-news-rag
 
-**torcida-news-rag** é um pipeline RSS-first (com scraping HTML para o ge.globo) que coleta notícias dos principais clubes brasileiros, deduplica, ranqueia, seleciona as melhores do dia e indexa no Elasticsearch para alimentar uma API de RAG e um servidor MCP.
+**torcida-news-rag** é um pipeline scraping-first (HTML) que coleta notícias dos principais clubes brasileiros, deduplica, ranqueia, seleciona as melhores do dia e indexa no Elasticsearch para alimentar uma API de RAG e um servidor MCP.
 
 A ideia é simples e divertida: todo dia o sistema “vira jornalista de plantão”, lê as manchetes mais quentes dos clubes, seleciona o que importa e entrega um briefing pronto para criação de conteúdo (ex.: post no WordPress/Elementor).
 
@@ -9,12 +9,13 @@ A ideia é simples e divertida: todo dia o sistema “vira jornalista de plantã
 ## Visão geral (técnica, mas com coração)
 
 - **5 coletas diárias** (00:30, 06:00, 14:00, 18:00 e 20:00 America/Fortaleza)
-- **RSS-first**: sem scraping pesado (exceção: ge.globo via scraping leve)
+- **Scraping-first**: scraping leve por portal (HTML) com filtro por URL/keywords
 - **Fallback inteligente**: se o feed do clube falhar, usa `FutebolGeral` do portal + filtro por keywords
 - **Dedup robusto**: URL + título normalizado + similaridade (rapidfuzz >= 92)
 - **Ranking**: recência + score do portal + match de keywords + penalidade para opinião/coluna
 - **Seleção diária**: top 3 por clube
 - **Indexação**: `news_articles` e `news_chunks` (embeddings opcionais)
+- **Janela mínima**: ingestão respeita `INGEST_START_DATE`
 - **API FastAPI** para consulta e briefing (sem chamar LLM)
 - **MCP server** oferecendo ferramentas para LLM
 
@@ -25,7 +26,7 @@ A ideia é simples e divertida: todo dia o sistema “vira jornalista de plantã
 ```mermaid
 flowchart TD
   A[Airflow Scheduler<br/>00:30 · 06:00 · 14:00 · 18:00 · 20:00] --> B[Ingestion Pipeline]
-  B --> C1[RSS por clube]
+  B --> C1[Scraping por clube]
   B --> C2[Fallback: FutebolGeral + keywords]
   C1 --> D[Normalização + Dedup]
   C2 --> D
@@ -48,11 +49,11 @@ C4Context
 title Contexto - torcida-news-rag
 Person(user, "Editor/Operador", "Consulta briefings e aciona o pipeline")
 System(system, "torcida-news-rag", "Coleta, rankeia e prepara briefing")
-System_Ext(rss, "Portais RSS", "RSS/HTTP")
+System_Ext(rss, "Portais Web", "HTML/HTTP")
 System_Ext(wp, "WordPress/Elementor", "Publicação de conteúdo")
 
 Rel(user, system, "Consulta e operacionaliza")
-Rel(system, rss, "Coleta RSS")
+Rel(system, rss, "Coleta Web")
 Rel(system, wp, "Entrega briefing para publicação")
 ```
 
@@ -68,11 +69,11 @@ System_Boundary(s1, "torcida-news-rag") {
   Container(es, "Elasticsearch", "8.x", "Indexação e busca")
   ContainerDb(pg, "Postgres", "15", "Metadados do Airflow")
 }
-System_Ext(rss, "Portais RSS", "RSS/HTTP")
+System_Ext(rss, "Portais Web", "HTML/HTTP")
 
 Rel(user, api, "Consulta notícias e briefings")
 Rel(user, mcp, "Tools via LLM")
-Rel(airflow, rss, "Fetch RSS")
+Rel(airflow, rss, "Fetch Web")
 Rel(airflow, es, "Indexa artigos e chunks")
 Rel(api, es, "Consulta")
 Rel(mcp, es, "Consulta")
@@ -87,7 +88,7 @@ C4Component
 title Componentes - Ingestion + API + MCP
 
 Container_Boundary(ing, "Ingestion Service") {
-  Component(rss, "RSS Fetcher", "Python", "Lê feeds RSS e aplica fallback")
+  Component(rss, "Web Scraper", "Python", "Extrai links de páginas e aplica fallback")
   Component(dedupe, "Deduplicador", "Python", "Hash/normalização/similaridade")
   Component(rank, "Ranker", "Python", "Scoring por recência/keywords/penalidade")
   Component(sel, "Selector", "Python", "Top 3 por clube e marca daily_pick")
@@ -104,9 +105,9 @@ Container_Boundary(mcp, "MCP Server") {
 }
 
 ContainerDb(es, "Elasticsearch", "8.x", "Índices news_articles/news_chunks")
-System_Ext(rssFeeds, "Portais RSS", "RSS/HTTP")
+System_Ext(rssFeeds, "Portais Web", "HTML/HTTP")
 
-Rel(rssFeeds, rss, "Itens RSS")
+Rel(rssFeeds, rss, "Itens HTML")
 Rel(rss, dedupe, "Candidatos")
 Rel(dedupe, rank, "Únicos")
 Rel(rank, idx, "Ordenados")
@@ -122,11 +123,13 @@ Rel(mcpTools, es, "Query")
 
 ## Lógica da aplicação (o “porquê” do pipeline)
 
-### 1) Coleta (RSS-first + ge.globo via scraping)
-- Cada portal possui feeds por clube e/ou um feed geral.
-- Se o feed específico falhar, o sistema usa o feed geral e **filtra por keywords do clube**.
+### 1) Coleta (scraping-first + fallback)
+- Cada portal possui páginas por clube e/ou uma página geral (`FutebolGeral`).
+- Se a página do clube falhar, o sistema usa a página geral e **filtra por keywords do clube**.
 - O HTML do artigo é baixado **apenas para extrair snippet e texto curto** (limite 6k chars).
-- Para o **ge.globo**, a coleta usa **scraping leve das páginas de clubes** (RSS desatualizado). Se falhar, cai no `FutebolGeral` com filtro por keywords.
+- O scraper tenta extrair itens via `application/ld+json` e, se necessário, por `<article>`/links na página.
+- Filtros por padrão de URL reduzem ruído por portal (ex.: `/esportes/futebol/` no CNN, `/esporte/futebol/` no UOL).
+- Itens anteriores à data configurada em `INGEST_START_DATE` são descartados.
 
 ### 2) Deduplicação
 Evita repetição “camuflada” de notícias similares:
@@ -309,16 +312,19 @@ Campos principais:
 ### Clubs
 Arquivo: `services/ingestion/config/clubs.yaml`
 - Top 10 já preenchido
-- **Todos os clubes habilitados por padrão**, incluindo Fortaleza
-- Se quiser manter apenas 10 clubes, faça substituição via `.env`
+- Fortaleza é opcional e pode substituir um clube via `.env`
 
 ### Sources
 Arquivo: `services/ingestion/config/sources.yaml`
-- Feeds pré-configurados por portal (RSS ou páginas HTML, dependendo do tipo)
-- Fallback automático para feed `FutebolGeral`
+- Páginas HTML por portal (scraping leve)
+- Fallback automático para página `FutebolGeral`
 
-### Portais e fontes (RSS/Web)
-Os portais abaixo são os que a coleta usa hoje, com as respectivas fontes:
+### Janela de ingestão
+Arquivo: `.env`
+- `INGEST_START_DATE`: descarta itens publicados antes dessa data (default `2026-02-27T00:00:00Z`)
+
+### Portais e fontes (Web)
+Os portais abaixo são os que a coleta usa hoje, com as respectivas páginas:
 
 **ge.globo (web scraping)**
 - Flamengo — https://ge.globo.com/futebol/times/flamengo/
@@ -340,37 +346,50 @@ Os portais abaixo são os que a coleta usa hoje, com as respectivas fontes:
 - Limite de itens por página: `INGEST_SCRAPE_MAX_ITEMS` (default 40).
 - Se a estrutura do site mudar, ajuste os slugs/URLs em `services/ingestion/config/sources.yaml`.
 
-**UOL Esporte**
-- FutebolGeral — https://esporte.uol.com.br/futebol/ultimas/index.xml
-- Flamengo — https://rss.esporte.uol.com.br/futebol/clubes/flamengo.xml
-- Corinthians — https://rss.esporte.uol.com.br/futebol/clubes/corinthians.xml
-- Palmeiras — https://rss.esporte.uol.com.br/futebol/clubes/palmeiras.xml
-- SaoPaulo — https://rss.esporte.uol.com.br/futebol/clubes/saopaulo.xml
-- Santos — https://rss.esporte.uol.com.br/futebol/clubes/santos.xml
-- Vasco — https://rss.esporte.uol.com.br/futebol/clubes/vasco.xml
-- Cruzeiro — https://rss.esporte.uol.com.br/futebol/clubes/cruzeiro.xml
-- AtleticoMG — https://rss.esporte.uol.com.br/futebol/clubes/atleticomg.xml
-- Bahia — https://rss.esporte.uol.com.br/futebol/clubes/bahia.xml
-- Fortaleza — https://rss.esporte.uol.com.br/futebol/clubes/fortaleza.xml
+**UOL Esporte (web)**
+- FutebolGeral — https://www.uol.com.br/esporte/futebol/ultimas/
+- Flamengo — https://www.uol.com.br/esporte/futebol/times/flamengo/
+- Corinthians — https://www.uol.com.br/esporte/futebol/times/corinthians/
+- Palmeiras — https://www.uol.com.br/esporte/futebol/times/palmeiras/
+- SaoPaulo — https://www.uol.com.br/esporte/futebol/times/sao-paulo/
+- Santos — https://www.uol.com.br/esporte/futebol/times/santos/
+- Vasco — https://www.uol.com.br/esporte/futebol/times/vasco/
+- Gremio — https://www.uol.com.br/esporte/futebol/times/gremio/
+- Cruzeiro — https://www.uol.com.br/esporte/futebol/times/cruzeiro/
+- AtleticoMG — https://www.uol.com.br/esporte/futebol/times/atletico-mg/
+- Bahia — https://www.uol.com.br/esporte/futebol/times/bahia/
+- Fortaleza — https://www.uol.com.br/esporte/futebol/times/fortaleza/
 
-**Gazeta Esportiva**
-- Flamengo — https://www.gazetaesportiva.com/times/flamengo/feed/
-- Corinthians — https://www.gazetaesportiva.com/times/corinthians/feed/
-- SaoPaulo — https://www.gazetaesportiva.com/times/sao-paulo/feed/
-- Palmeiras — https://www.gazetaesportiva.com/times/palmeiras/feed/
-- Santos — https://www.gazetaesportiva.com/times/santos/feed/
-- Vasco — https://www.gazetaesportiva.com/times/vasco/feed/
-- Cruzeiro — https://www.gazetaesportiva.com/times/cruzeiro/feed/
-- AtleticoMG — https://www.gazetaesportiva.com/times/atletico-mg/feed/
-- Bahia — https://www.gazetaesportiva.com/times/bahia/feed/
-- Fortaleza — https://www.gazetaesportiva.com/times/fortaleza/feed/
-- FutebolGeral — https://www.gazetaesportiva.com/futebol/feed/
+**Gazeta Esportiva (web)**
+- Flamengo — https://www.gazetaesportiva.com/times/flamengo/
+- Corinthians — https://www.gazetaesportiva.com/times/corinthians/
+- SaoPaulo — https://www.gazetaesportiva.com/times/sao-paulo/
+- Palmeiras — https://www.gazetaesportiva.com/times/palmeiras/
+- Santos — https://www.gazetaesportiva.com/times/santos/
+- Vasco — https://www.gazetaesportiva.com/times/vasco/
+- Gremio — https://www.gazetaesportiva.com/times/gremio/
+- Cruzeiro — https://www.gazetaesportiva.com/times/cruzeiro/
+- AtleticoMG — https://www.gazetaesportiva.com/times/atletico-mg/
+- Bahia — https://www.gazetaesportiva.com/times/bahia/
+- Fortaleza — https://www.gazetaesportiva.com/times/fortaleza/
+- FutebolGeral — https://www.gazetaesportiva.com/futebol/
 
-**ESPN (Soccer Headlines)**
-- FutebolGeral — https://www.espn.com/espn/rss/soccer/news
+**ESPN Brasil (web)**
+- FutebolGeral — https://www.espn.com.br/futebol/
 
-**CNN Brasil (Esportes S/A tag feed)**
-- FutebolGeral — https://www.cnnbrasil.com.br/tudo-sobre/cnn-esportes-s-a/feed/feed/
+**CNN Brasil (web)**
+- FutebolGeral — https://www.cnnbrasil.com.br/esportes/futebol/
+- Flamengo — https://www.cnnbrasil.com.br/esportes/futebol/flamengo/
+- Corinthians — https://www.cnnbrasil.com.br/esportes/futebol/corinthians/
+- Palmeiras — https://www.cnnbrasil.com.br/esportes/futebol/palmeiras/
+- SaoPaulo — https://www.cnnbrasil.com.br/esportes/futebol/sao-paulo/
+- Santos — https://www.cnnbrasil.com.br/esportes/futebol/santos/
+- Vasco — https://www.cnnbrasil.com.br/esportes/futebol/vasco/
+- Gremio — https://www.cnnbrasil.com.br/esportes/futebol/gremio/
+- Cruzeiro — https://www.cnnbrasil.com.br/esportes/futebol/cruzeiro/
+- AtleticoMG — https://www.cnnbrasil.com.br/esportes/futebol/atletico-mg/
+- Bahia — https://www.cnnbrasil.com.br/esportes/futebol/bahia/
+- Fortaleza — https://www.cnnbrasil.com.br/esportes/futebol/fortaleza/
 
 ---
 
@@ -386,7 +405,7 @@ Os portais abaixo são os que a coleta usa hoje, com as respectivas fontes:
    - API: http://localhost:8000
    - MCP: http://localhost:7010
    - Elasticsearch: http://localhost:9200
-   - Kibana (opcional): http://localhost:5601
+   - Kibana: http://localhost:5601
 
 ---
 
@@ -400,12 +419,7 @@ curl -s "http://localhost:9200/news_articles/_search?size=3"
 ```
 
 ### Kibana (interface visual)
-O Kibana está como serviço **opcional** no Compose (profile `kibana`).
-
-Para subir com Kibana:
-```bash
-docker compose -f docker-compose.dev-local.yml --profile kibana up -d
-```
+O Kibana sobe por padrão junto com os outros serviços.
 
 Passos para ver artigos:
 1. Acesse http://localhost:5601
@@ -413,6 +427,12 @@ Passos para ver artigos:
 3. Crie um **Data View** para `news_articles`
 4. Selecione o campo de tempo `published_at`
 5. Explore os documentos e filtre por `club_id`
+
+### Kibana: views prontas (script)
+Para criar um Data View e Saved Searches por clube e por data:
+```bash
+python3 scripts/kibana_seed.py
+```
 
 ---
 
@@ -449,12 +469,12 @@ FORTALEZA_REPLACE_CLUB_ID=
 ## Observações legais e boas práticas
 - Respeito a rate limits e timeouts configuráveis.
 - Conteúdo limitado para evitar riscos de copyright.
-- RSS-first, scraping mínimo (apenas snippet + texto curto; scraping leve no ge.globo).
+- Scraping leve com filtros por URL/keywords (apenas snippet + texto curto).
 
 ---
 
 ## Roadmap (ideias futuras)
-- Scraping avançado para outros portais (opt-in)
+- Melhorias de seletor/precisão por portal (opt-in)
 - Embeddings + reranking
 - Cache por portal
 - Avaliação automática de qualidade de fontes
@@ -470,7 +490,7 @@ FORTALEZA_REPLACE_CLUB_ID=
 ---
 
 ## Glossário rápido
-- **RSS-first**: prioriza feeds RSS antes de qualquer scraping (exceção: ge.globo usa scraping leve)
+- **Scraping-first**: prioriza páginas HTML e aplica filtros por portal/keywords
 - **RAG**: retrieval-augmented generation (aqui só preparamos contexto)
 - **MCP**: Model Context Protocol, para expor ferramentas ao LLM
 

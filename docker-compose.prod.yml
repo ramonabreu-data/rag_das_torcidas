@@ -25,7 +25,7 @@ services:
       - ES_JAVA_OPTS=-Xms1g -Xmx1g
       - TZ=${TZ}
     ports:
-      - "${ELASTIC_PORT:-9200}:9200"
+      - "187.77.58.203:${ELASTIC_PORT:-9200}:9200"
     volumes:
       - es_data:/usr/share/elasticsearch/data
     networks:
@@ -34,7 +34,6 @@ services:
   kibana:
     image: docker.elastic.co/kibana/kibana:8.12.2
     container_name: torcida-kibana
-    profiles: ["kibana"]
     restart: unless-stopped
     depends_on:
       - elasticsearch
@@ -42,7 +41,7 @@ services:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
       - TZ=${TZ}
     ports:
-      - "${KIBANA_PORT:-5601}:5601"
+      - "187.77.58.203:${KIBANA_PORT:-5601}:5601"
     networks:
       - torcida-net
 
@@ -67,14 +66,13 @@ services:
       - ./:/opt/airflow/project
     user: "${AIRFLOW_UID}:0"
     command: >
-      bash -c "airflow db init &&
-      airflow users create \
-        --username ${AIRFLOW_ADMIN_USER} \
-        --password ${AIRFLOW_ADMIN_PASSWORD} \
-        --firstname ${AIRFLOW_ADMIN_FIRSTNAME} \
-        --lastname ${AIRFLOW_ADMIN_LASTNAME} \
-        --role Admin \
-        --email ${AIRFLOW_ADMIN_EMAIL} || true"
+      bash -lc "airflow db init &&
+      airflow users create --username ${AIRFLOW_ADMIN_USER}
+      --password ${AIRFLOW_ADMIN_PASSWORD}
+      --firstname ${AIRFLOW_ADMIN_FIRSTNAME}
+      --lastname ${AIRFLOW_ADMIN_LASTNAME}
+      --role Admin
+      --email ${AIRFLOW_ADMIN_EMAIL} || true"
     networks:
       - torcida-net
 
@@ -101,7 +99,7 @@ services:
       - ./:/opt/airflow/project
     user: "${AIRFLOW_UID}:0"
     ports:
-      - "${AIRFLOW_WEBSERVER_PORT:-8080}:8080"
+      - "187.77.58.203:${AIRFLOW_WEBSERVER_PORT:-8080}:8080"
     command: webserver
     networks:
       - torcida-net
@@ -142,7 +140,7 @@ services:
     depends_on:
       - elasticsearch
     ports:
-      - "${API_PORT:-8000}:${API_PORT:-8000}"
+      - "187.77.58.203:${API_PORT:-8000}:${API_PORT:-8000}"
     command: ["uvicorn", "services.api.main:app", "--host", "0.0.0.0", "--port", "${API_PORT:-8000}"]
     networks:
       - torcida-net
@@ -157,7 +155,7 @@ services:
     depends_on:
       - elasticsearch
     ports:
-      - "${MCP_PORT:-7010}:${MCP_PORT:-7010}"
+      - "187.77.58.203:${MCP_PORT:-7010}:${MCP_PORT:-7010}"
     networks:
       - torcida-net
 

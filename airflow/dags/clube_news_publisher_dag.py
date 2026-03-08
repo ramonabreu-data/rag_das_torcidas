@@ -817,7 +817,7 @@ def task_process_club(index: int, **kwargs):
 
     # ETAPA E — Download e upload da imagem no WordPress
     media_id = None
-    media_url = None
+    media_url = image_url
     try:
         image_bytes_response = requests.get(image_url, timeout=30)
         image_bytes_response.raise_for_status()
@@ -830,43 +830,64 @@ def task_process_club(index: int, **kwargs):
             "Content-Type": "image/png",
         }
 
-        upload_response = requests.post(
-            f"{WP_SITE}/wp-json/wp/v2/media",
-            headers=media_headers,
-            data=image_bytes,
-            timeout=60,
-        )
-        upload_response.raise_for_status()
+        last_upload_error = None
+        for attempt in range(1, 4):
+            try:
+                upload_response = requests.post(
+                    f"{WP_SITE}/wp-json/wp/v2/media",
+                    headers=media_headers,
+                    data=image_bytes,
+                    timeout=60,
+                )
+                upload_response.raise_for_status()
 
-        media_json = upload_response.json() or {}
-        media_id = media_json.get("id")
-        media_url = media_json.get("source_url") or image_url
+                media_json = upload_response.json() or {}
+                media_id = media_json.get("id")
+                media_url = media_json.get("source_url") or image_url
+
+                if not media_id:
+                    raise AirflowException("Resposta de upload sem media_id")
+                break
+            except Exception as upload_exc:
+                last_upload_error = upload_exc
+                logging.warning(
+                    "club_id=%s ETAPA_E tentativa %s/3 falhou no upload da mídia: %s",
+                    club_id,
+                    attempt,
+                    upload_exc,
+                )
+                time.sleep(min(2 * attempt, 6))
 
         if not media_id:
-            result = fail("ETAPA_E", "Resposta de upload sem media_id")
-            ti.xcom_push(key="result", value=result)
-            return result
+            raise last_upload_error or AirflowException("Upload da mídia sem retorno válido")
     except Exception as exc:
-        result = fail("ETAPA_E", str(exc))
-        ti.xcom_push(key="result", value=result)
-        return result
+        media_id = None
+        media_url = fallback_image_url or image_url
+        logging.warning(
+            "club_id=%s ETAPA_E sem upload de mídia; seguindo sem featured_media. erro=%s",
+            club_id,
+            exc,
+        )
 
     # ETAPA F — Inserir imagem no CONTENT
     try:
-        figure_html = (
-            '<figure class="article-image">\n'
-            f'  <img src="{media_url}" alt="{title}"/>\n'
-            '  <figcaption>Imagem: <a href="https://openai.com" rel="nofollow noopener">'
-            "OpenAI DALL-E 3</a></figcaption>\n"
-            "</figure>"
-        )
+        if media_url:
+            figure_html = (
+                '<figure class="article-image">\n'
+                f'  <img src="{media_url}" alt="{title}"/>\n'
+                '  <figcaption>Imagem: <a href="https://openai.com" rel="nofollow noopener">'
+                "OpenAI DALL-E 3</a></figcaption>\n"
+                "</figure>"
+            )
 
-        if "<!--IMAGE_HERE-->" in content:
-            content = content.replace("<!--IMAGE_HERE-->", figure_html, 1)
-        elif re.search(r"</h1>", content, flags=re.IGNORECASE):
-            content = re.sub(r"</h1>", f"</h1>\n{figure_html}", content, count=1, flags=re.IGNORECASE)
+            if "<!--IMAGE_HERE-->" in content:
+                content = content.replace("<!--IMAGE_HERE-->", figure_html, 1)
+            elif re.search(r"</h1>", content, flags=re.IGNORECASE):
+                content = re.sub(r"</h1>", f"</h1>\n{figure_html}", content, count=1, flags=re.IGNORECASE)
+            else:
+                content = f"{figure_html}\n{content}"
         else:
-            content = f"{figure_html}\n{content}"
+            content = content.replace("<!--IMAGE_HERE-->", "")
     except Exception as exc:
         result = fail("ETAPA_F", str(exc))
         ti.xcom_push(key="result", value=result)
@@ -959,28 +980,43 @@ def task_process_club(index: int, **kwargs):
             "status": "publish",
             "categories": [category_id],
             "tags": tag_ids,
-            "featured_media": media_id,
         }
+        if media_id:
+            publish_payload["featured_media"] = media_id
 
-        publish_response = requests.post(
-            f"{WP_SITE}/wp-json/wp/v2/posts",
-            headers=wp_headers(),
-            json=publish_payload,
-            timeout=30,
-        )
-        publish_response.raise_for_status()
+        publish_json = {}
+        wp_post_id = None
+        last_publish_error = None
+        for attempt in range(1, 4):
+            try:
+                publish_response = requests.post(
+                    f"{WP_SITE}/wp-json/wp/v2/posts",
+                    headers=wp_headers(),
+                    json=publish_payload,
+                    timeout=30,
+                )
+                publish_response.raise_for_status()
 
-        publish_json = publish_response.json() or {}
-        if publish_json.get("status") != "publish":
-            result = fail("ETAPA_I", f"Post não publicado. status={publish_json.get('status')}")
-            ti.xcom_push(key="result", value=result)
-            return result
+                publish_json = publish_response.json() or {}
+                if publish_json.get("status") != "publish":
+                    raise AirflowException(f"Post não publicado. status={publish_json.get('status')}")
 
-        wp_post_id = publish_json.get("id")
+                wp_post_id = publish_json.get("id")
+                if not wp_post_id:
+                    raise AirflowException("Resposta sem id do post")
+                break
+            except Exception as publish_exc:
+                last_publish_error = publish_exc
+                logging.warning(
+                    "club_id=%s ETAPA_I tentativa %s/3 falhou ao publicar post: %s",
+                    club_id,
+                    attempt,
+                    publish_exc,
+                )
+                time.sleep(min(2 * attempt, 6))
+
         if not wp_post_id:
-            result = fail("ETAPA_I", "Resposta sem id do post")
-            ti.xcom_push(key="result", value=result)
-            return result
+            raise last_publish_error or AirflowException("Falha na publicação sem detalhe")
 
         result = {
             "club_id": club_id,

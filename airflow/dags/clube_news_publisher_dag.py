@@ -12,15 +12,13 @@ import requests
 from airflow import DAG
 from airflow.models import Variable
 from airflow.operators.python import PythonOperator
-from airflow.exceptions import AirflowException
+from airflow.exceptions import AirflowException, AirflowFailException
 from airflow.utils.trigger_rule import TriggerRule
 
 
 # ===========================================================================
 # CREDENCIAIS E CONFIGURAÇÕES GERAIS
 # ===========================================================================
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or Variable.get("OPENAI_API_KEY", default_var=None)
-
 WP_SITE = "https://ups1tride.com"
 WP_USER = "ddd"
 WP_APP_PASS = "snGZfPrA9l6SWGktAi1yRMVp"
@@ -132,13 +130,14 @@ def wp_headers() -> dict:
 
 def openai_headers() -> dict:
     """Headers para chamadas à API OpenAI."""
-    if not OPENAI_API_KEY:
+    openai_api_key = os.getenv("OPENAI_API_KEY") or Variable.get("OPENAI_API_KEY", default_var=None)
+    if not openai_api_key:
         raise AirflowException(
             "OPENAI_API_KEY não configurada. Defina a variável de ambiente OPENAI_API_KEY "
             "ou a Airflow Variable OPENAI_API_KEY."
         )
     return {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Authorization": f"Bearer {openai_api_key}",
         "Content-Type": "application/json",
     }
 
@@ -1053,6 +1052,15 @@ def task_log_summary(**kwargs):
     logging.info("Resumo da execução - total esperado: 3")
     logging.info("Publicados com sucesso: %s", len(success))
     logging.info("Falhas: %s", failures)
+
+    missing_openai_key = any(
+        "OPENAI_API_KEY não configurada" in (item.get("motivo") or "") for item in failures
+    )
+    if missing_openai_key:
+        raise AirflowFailException(
+            "OPENAI_API_KEY ausente no runtime. Configure em .env ou em Airflow Variable "
+            "OPENAI_API_KEY e reexecute a DAG."
+        )
 
     if len(success) == 0:
         raise AirflowException("Nenhum artigo publicado neste disparo")

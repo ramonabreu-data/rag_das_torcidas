@@ -290,19 +290,20 @@ def resolve_or_create_wp_term(endpoint: str, slug: str, name: str) -> int | None
     """Busca um term (category ou tag) no WP pelo slug. Cria se não existir. Retorna o ID."""
     base = f"{WP_SITE}/wp-json/wp/v2/{endpoint}"
 
-    try:
-        response = requests.get(
-            base,
-            headers=wp_headers(),
-            params={"per_page": 100, "slug": slug, "_fields": "id,slug,name"},
-            timeout=20,
-        )
-        if response.ok:
-            terms = response.json() or []
-            if terms:
-                return terms[0].get("id")
-    except Exception as exc:
-        logging.error("Falha ao buscar term endpoint=%s slug=%s erro=%s", endpoint, slug, exc)
+    for headers in (wp_headers(), {"Content-Type": "application/json"}):
+        try:
+            response = requests.get(
+                base,
+                headers=headers,
+                params={"per_page": 100, "slug": slug, "_fields": "id,slug,name"},
+                timeout=20,
+            )
+            if response.ok:
+                terms = response.json() or []
+                if terms:
+                    return terms[0].get("id")
+        except Exception as exc:
+            logging.error("Falha ao buscar term endpoint=%s slug=%s erro=%s", endpoint, slug, exc)
 
     try:
         create_response = requests.post(
@@ -897,13 +898,20 @@ def task_process_club(index: int, **kwargs):
     try:
         category_id = resolve_or_create_wp_term("categories", club_id, CLUBS[club_id]["name"])
         if not category_id:
-            result = fail("ETAPA_G", "Não foi possível resolver/criar categoria")
-            ti.xcom_push(key="result", value=result)
-            return result
+            category_id = 1
+            logging.warning(
+                "club_id=%s ETAPA_G sem categoria específica; usando fallback category_id=%s",
+                club_id,
+                category_id,
+            )
     except Exception as exc:
-        result = fail("ETAPA_G", str(exc))
-        ti.xcom_push(key="result", value=result)
-        return result
+        category_id = 1
+        logging.warning(
+            "club_id=%s ETAPA_G falhou com exceção; usando fallback category_id=%s erro=%s",
+            club_id,
+            category_id,
+            exc,
+        )
 
     # ETAPA H — Resolver tags do post
     try:
@@ -1099,7 +1107,7 @@ def task_log_summary(**kwargs):
         )
 
     if len(success) == 0:
-        raise AirflowException("Nenhum artigo publicado neste disparo")
+        raise AirflowFailException("Nenhum artigo publicado neste disparo")
 
     return {
         "total": 3,

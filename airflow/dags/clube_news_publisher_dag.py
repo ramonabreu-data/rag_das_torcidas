@@ -44,6 +44,34 @@ CLUBS = {
     "gremio": {"name": "GRÊMIO-RS", "page_url": "https://ups1tride.com/gremio-rs/"},
 }
 
+CLUB_PAGE_SLUGS = {
+    "flamengo": "flamengo",
+    "palmeiras": "plameiras",
+    "corinthians": "corinthians",
+    "vasco": "vasco",
+    "santos": "santos",
+    "sao-paulo": "sao-paulo",
+    "cruzeiro": "cruzeiro",
+    "atletico-mg": "atletico-mg",
+    "fortaleza": "fortaleza",
+    "bahia": "bahia",
+    "gremio": "gremio-rs",
+}
+
+CLUB_PAGE_URLS = {
+    "flamengo": "https://ups1tride.com/flamengo/",
+    "palmeiras": "https://ups1tride.com/plameiras/",
+    "corinthians": "https://ups1tride.com/corinthians/",
+    "vasco": "https://ups1tride.com/vasco/",
+    "santos": "https://ups1tride.com/santos/",
+    "sao-paulo": "https://ups1tride.com/sao-paulo/",
+    "cruzeiro": "https://ups1tride.com/cruzeiro/",
+    "atletico-mg": "https://ups1tride.com/atletico-mg/",
+    "fortaleza": "https://ups1tride.com/fortaleza/",
+    "bahia": "https://ups1tride.com/bahia/",
+    "gremio": "https://ups1tride.com/gremio-rs/",
+}
+
 CLUB_COLORS = {
     "flamengo": "vermelho e preto",
     "palmeiras": "verde e branco",
@@ -672,6 +700,179 @@ def resolve_or_create_wp_term(endpoint: str, slug: str, name: str) -> int | None
         logging.error("Erro ao criar term endpoint=%s slug=%s erro=%s", endpoint, slug, exc)
 
     return None
+
+
+def get_or_create_club_category(club_id: str) -> int:
+    """
+    Busca a categoria do clube no WordPress pelo slug.
+    Se não existir, cria com o nome e slug corretos.
+    Retorna o category_id.
+    Lança Exception se não conseguir criar ou encontrar.
+    """
+    slug = CLUB_PAGE_SLUGS[club_id]
+    name = CLUBS[club_id]["name"]
+    base_url = f"{wp_base_url()}/wp-json/wp/v2/categories"
+    headers = wp_headers()
+
+    # 1. Tentar buscar pelo slug exato.
+    resp = requests.get(
+        f"{base_url}?slug={slug}&per_page=1&_fields=id,slug,name,link",
+        headers=headers,
+        timeout=10,
+        verify=wp_verify_ssl(),
+    )
+    if resp.status_code == 200:
+        results = resp.json()
+        if results:
+            cat_id = results[0]["id"]
+            logging.info("Categoria encontrada: %s (id=%s, slug=%s)", name, cat_id, slug)
+            return cat_id
+
+    # 2. Tentar buscar pelo nome exato.
+    resp2 = requests.get(
+        f"{base_url}?search={name}&per_page=10&_fields=id,slug,name",
+        headers=headers,
+        timeout=10,
+        verify=wp_verify_ssl(),
+    )
+    if resp2.status_code == 200:
+        for cat in resp2.json():
+            if cat.get("slug") == slug or cat.get("name", "").upper() == name.upper():
+                cat_id = cat["id"]
+                logging.info("Categoria encontrada por nome: %s (id=%s)", name, cat_id)
+                return cat_id
+
+    # 3. Criar a categoria.
+    payload = {"name": name, "slug": slug}
+    resp3 = requests.post(base_url, headers=headers, json=payload, timeout=10, verify=wp_verify_ssl())
+
+    if resp3.status_code in (200, 201):
+        cat_id = (resp3.json() or {}).get("id")
+        if cat_id:
+            logging.info("Categoria criada: %s (id=%s, slug=%s)", name, cat_id, slug)
+            return cat_id
+
+    # 4. Conflito de slug com term_id já existente.
+    error_data = resp3.json() if resp3.content else {}
+    existing_id = (error_data.get("additional_data", {}) or {}).get("term_id") or (
+        error_data.get("data", {}) or {}
+    ).get("term_id")
+    if existing_id:
+        logging.info("Categoria já existia (conflito): %s (id=%s)", name, existing_id)
+        return existing_id
+
+    raise Exception(
+        f"Falha ao criar/encontrar categoria para {club_id}: "
+        f"status={resp3.status_code} body={(resp3.text or '')[:200]}"
+    )
+
+
+def publish_post_to_club_page(
+    club_id: str,
+    title: str,
+    content: str,
+    slug: str,
+    tag_ids: list[int],
+    media_id: int | None,
+) -> dict:
+    """
+    Publica o post no WordPress vinculado EXCLUSIVAMENTE
+    à categoria do clube, garantindo que aparece na página do clube.
+    """
+    category_id = get_or_create_club_category(club_id)
+
+    body = {
+        "title": title,
+        "content": content,
+        "slug": slug,
+        "status": "publish",
+        "categories": [category_id],
+        "tags": tag_ids,
+    }
+    if media_id:
+        body["featured_media"] = media_id
+
+    headers = wp_headers()
+
+    resp = requests.post(
+        f"{wp_base_url()}/wp-json/wp/v2/posts",
+        headers=headers,
+        json=body,
+        timeout=30,
+        verify=wp_verify_ssl(),
+    )
+
+    if resp.status_code not in (200, 201):
+        raise Exception(
+            f"Falha ao publicar post para {club_id}: "
+            f"status={resp.status_code} body={(resp.text or '')[:300]}"
+        )
+
+    result = resp.json() or {}
+    wp_post_id = result.get("id")
+    wp_post_link = result.get("link", "")
+    wp_post_status = result.get("status", "")
+
+    if wp_post_status != "publish":
+        raise Exception(
+            f"Post criado mas não publicado para {club_id}: "
+            f"status={wp_post_status} id={wp_post_id}"
+        )
+
+    logging.info(
+        "Post publicado: clube=%s | id=%s | categoria=%s | link=%s",
+        club_id,
+        wp_post_id,
+        category_id,
+        wp_post_link,
+    )
+
+    return {
+        "wp_post_id": wp_post_id,
+        "wp_post_link": wp_post_link,
+        "category_id": category_id,
+        "club_id": club_id,
+    }
+
+
+def verify_post_on_club_page(wp_post_id: int, club_id: str) -> bool:
+    """
+    Confirma que o post publicado está associado à categoria do clube.
+    """
+    headers = wp_headers()
+    headers.pop("Content-Type", None)
+
+    resp = requests.get(
+        f"{wp_base_url()}/wp-json/wp/v2/posts/{wp_post_id}?_fields=id,categories,link",
+        headers=headers,
+        timeout=10,
+        verify=wp_verify_ssl(),
+    )
+    if resp.status_code != 200:
+        logging.warning("Não foi possível verificar post %s", wp_post_id)
+        return False
+
+    post_data = resp.json() or {}
+    category_id = get_or_create_club_category(club_id)
+    categories = post_data.get("categories", [])
+
+    if category_id in categories:
+        logging.info(
+            "VERIFICADO: post %s está na página do clube %s | link=%s",
+            wp_post_id,
+            club_id,
+            post_data.get("link", ""),
+        )
+        return True
+
+    logging.error(
+        "FALHA NA VERIFICAÇÃO: post %s NÃO está na categoria %s do clube %s. Categorias encontradas: %s",
+        wp_post_id,
+        category_id,
+        club_id,
+        categories,
+    )
+    return False
 
 
 def find_wp_post_by_slug(slug: str) -> dict | None:
@@ -1333,7 +1534,7 @@ def task_process_club(index: int, **kwargs):
 
     # ETAPA G — Resolver categoria do clube no WordPress
     try:
-        category_id = resolve_or_create_wp_term("categories", club_id, CLUBS[club_id]["name"])
+        category_id = get_or_create_club_category(club_id)
         if not category_id:
             result = fail("ETAPA_G", "Categoria do clube não encontrada/criada")
             ti.xcom_push(key="result", value=result)
@@ -1408,75 +1609,26 @@ def task_process_club(index: int, **kwargs):
 
     # ETAPA I — Publicar post no WordPress
     try:
-        club_page_id = get_club_page_id(club_id)
-        publish_payload = {
-            "title": title,
-            "content": content,
-            "slug": slug,
-            "status": "publish",
-            "categories": [category_id],
-        }
-        if tag_ids:
-            publish_payload["tags"] = tag_ids
-        if media_id:
-            publish_payload["featured_media"] = media_id
-        if club_page_id:
-            publish_payload["parent"] = club_page_id
-        else:
-            logging.warning("club_id=%s publicação seguirá sem parent por ausência de page_id", club_id)
+        post_title = title
+        final_content = content
+        post_slug = slug
 
-        # Reduz chance de reset simultâneo quando 3 tasks publicam no mesmo instante.
-        if index > 0:
-            time.sleep(index)
-
-        publish_json = None
-        last_publish_error = None
-        publish_attempts = 3
-        for attempt in range(1, publish_attempts + 1):
-            try:
-                publish_response = wp_request(
-                    "POST",
-                    "/posts",
-                    json_payload=publish_payload,
-                    headers={"Connection": "close"},
-                    timeout=30,
-                    retries=3,
-                )
-                publish_json = publish_response.json() or {}
-                break
-            except Exception as exc:
-                last_publish_error = exc
-                recovered = find_wp_post_by_slug(slug)
-                if recovered and recovered.get("id"):
-                    publish_json = recovered
-                    logging.warning(
-                        "club_id=%s ETAPA_I conexão falhou, mas post recuperado por slug=%s id=%s",
-                        club_id,
-                        slug,
-                        recovered.get("id"),
-                    )
-                    break
-                if attempt < publish_attempts:
-                    wait_seconds = min(2 * attempt, 8)
-                    logging.warning(
-                        "club_id=%s ETAPA_I tentativa %s/%s falhou no publish. retry em %ss erro=%s",
-                        club_id,
-                        attempt,
-                        publish_attempts,
-                        wait_seconds,
-                        exc,
-                    )
-                    time.sleep(wait_seconds)
-
-        if not publish_json:
-            raise AirflowException(f"Publish sem resposta válida após retries. erro={last_publish_error}")
-
-        if publish_json.get("status") and publish_json.get("status") != "publish":
-            raise AirflowException(f"Post não publicado. status={publish_json.get('status')}")
-
-        wp_post_id = publish_json.get("id")
+        published = publish_post_to_club_page(
+            club_id=club_id,
+            title=post_title,
+            content=final_content,
+            slug=post_slug,
+            tag_ids=tag_ids,
+            media_id=media_id,
+        )
+        wp_post_id = published["wp_post_id"]
         if not wp_post_id:
             raise AirflowException("Resposta sem id do post")
+
+        try:
+            verify_post_on_club_page(wp_post_id, club_id)
+        except Exception as verify_exc:
+            logging.error("Falha na verificação do post %s no clube %s: %s", wp_post_id, club_id, verify_exc)
 
         result = {
             "club_id": club_id,

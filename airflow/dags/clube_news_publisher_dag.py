@@ -43,6 +43,20 @@ CLUBS = {
     "gremio": {"name": "GRÊMIO-RS", "page": "/clube/gremio/"},
 }
 
+CLUB_COLORS = {
+    "flamengo": "vermelho e preto",
+    "palmeiras": "verde e branco",
+    "corinthians": "preto e branco",
+    "vasco": "preto e branco",
+    "santos": "branco e preto",
+    "sao-paulo": "vermelho, preto e branco",
+    "cruzeiro": "azul e branco",
+    "atletico-mg": "preto e branco",
+    "fortaleza": "azul, vermelho e preto",
+    "bahia": "azul e vermelho",
+    "gremio": "azul, preto e branco",
+}
+
 CLUB_PRIORITY = [
     "flamengo",
     "palmeiras",
@@ -286,6 +300,99 @@ def extract_og_image(html: str) -> str | None:
 
 def strip_html(text: str) -> str:
     return re.sub(r"<[^>]*>", " ", text or "").strip()
+
+
+def remove_external_links(content: str, internal_domain: str = "ups1tride.com") -> str:
+    """Remove links externos do HTML, mantendo apenas o texto âncora."""
+
+    def replace_link(match):
+        href = match.group(1)
+        text = match.group(2)
+        if href.startswith("/") or internal_domain in href:
+            return match.group(0)
+        logging.warning(f"Link externo removido: {href}")
+        return text
+
+    return re.sub(
+        r'<a\s+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+        replace_link,
+        content or "",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
+def enforce_club_page_links(content: str, club_page_url: str) -> str:
+    """Força todos os links internos a usarem a club_page_url do clube."""
+
+    def replace_link(match):
+        text = match.group(2)
+        return f'<a href="{club_page_url}">{text}</a>'
+
+    return re.sub(
+        r'<a\s+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+        replace_link,
+        content or "",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
+def ensure_mandatory_club_link(content: str, club_page_url: str, club_name: str) -> str:
+    display_name = club_name.strip().title()
+    mandatory_anchor = f'<a href="{club_page_url}">Mais notícias do {display_name}</a>'
+    if re.search(
+        r'<a\s+href=["\']'
+        + re.escape(club_page_url)
+        + r'["\'][^>]*>\s*Mais notícias do .*?</a>',
+        content or "",
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        return content
+    return f"{content}\n<p>{mandatory_anchor}</p>"
+
+
+def ensure_single_article_figure(content: str, figure_html: str) -> str:
+    content = content or ""
+    content = re.sub(
+        r'<figure[^>]*class=["\'][^"\']*article-image[^"\']*["\'][\s\S]*?</figure>',
+        "",
+        content,
+        flags=re.IGNORECASE,
+    )
+    content = re.sub(r"<img\b[^>]*>", "", content, flags=re.IGNORECASE)
+    content = re.sub(
+        r"(<!--IMAGE_HERE-->)(\s*<!--IMAGE_HERE-->)+",
+        "<!--IMAGE_HERE-->",
+        content,
+    )
+
+    if "<!--IMAGE_HERE-->" in content:
+        content = content.replace("<!--IMAGE_HERE-->", figure_html, 1)
+        content = content.replace("<!--IMAGE_HERE-->", "")
+    elif re.search(r"</h1>", content, flags=re.IGNORECASE):
+        content = re.sub(r"</h1>", f"</h1>\n{figure_html}", content, count=1, flags=re.IGNORECASE)
+    else:
+        content = f"{figure_html}\n{content}"
+
+    figure_pattern = r'(<figure\s+class=["\']article-image["\'][\s\S]*?</figure>)'
+    figures = re.findall(figure_pattern, content, flags=re.IGNORECASE)
+    if not figures:
+        content = f"{figure_html}\n{content}"
+        figures = re.findall(figure_pattern, content, flags=re.IGNORECASE)
+
+    if len(figures) > 1:
+        first = figures[0]
+        content = re.sub(figure_pattern, "", content, flags=re.IGNORECASE)
+        content = f"{first}\n{content}"
+
+    if '<figure class="article-image">' not in content:
+        content = re.sub(
+            r"<figure\s+class=['\"]article-image['\"]>",
+            '<figure class="article-image">',
+            content,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return content
 
 
 def parse_published_at(value: str) -> datetime:
@@ -702,7 +809,7 @@ def task_select_clubs(**kwargs):
             {
                 "club_id": club_id,
                 "club_name": club_data["name"],
-                "club_page_url": f"{wp_base_url()}{club_data['page']}",
+                "club_page_url": club_data["page"],
                 "docs_sorted": grouped.get(club_id, []),
             }
         )
@@ -794,13 +901,22 @@ def task_process_club(index: int, **kwargs):
         clubs_previous_run = state.get("last_picked_clubs") or []
 
         user_prompt_payload = {
+            "regras_iniciais": [
+                "Escreva SOMENTE com base nos dados de main_doc e related_docs fornecidos.",
+                "Nunca inventar placares, contratações, demissões, escalações ou declarações que não estejam nos dados recebidos.",
+                "Se um dado não estiver confirmado nos documentos, não mencione.",
+                "Nunca incluir links externos ou citar outros sites no corpo do artigo.",
+                "Todos os links internos devem apontar exclusivamente para páginas do próprio site usando club_page_url fornecido.",
+                "O artigo deve ter entre 750 e 1200 palavras.",
+                "Inserir exatamente UM marcador <!--IMAGE_HERE--> no melhor ponto do texto. Não inserir mais de um marcador. Não inserir a tag <img> diretamente.",
+            ],
             "instrucao": "Retorne APENAS JSON válido no formato solicitado.",
             "regras": {
                 "palavras": "Obrigatório entre 750 e 1200 palavras.",
                 "foco": "90% na notícia principal e 10% de contexto com relacionadas.",
                 "factual": "Não inventar dados; usar apenas os dados fornecidos.",
-                "links": "Não usar links externos no corpo; incluir link interno para club_page_url.",
-                "imagem": "Inserir marcador literal <!--IMAGE_HERE--> no ponto da imagem.",
+                "links": "Não usar links externos no corpo; usar apenas club_page_url em links internos.",
+                "imagem": "Inserir exatamente um marcador literal <!--IMAGE_HERE--> no ponto da imagem, sem tag <img>.",
                 "escopo": "Não misturar fatos de outros clubes.",
             },
             "formato_esperado": {
@@ -840,10 +956,30 @@ def task_process_club(index: int, **kwargs):
                 {
                     "role": "system",
                     "content": (
-                        "Você é um jornalista esportivo especializado em futebol brasileiro. "
-                        "Escreva artigos factuais, humanos e objetivos com entre 750 e 1200 palavras. "
-                        "Retorne APENAS JSON válido no formato solicitado. "
-                        "O campo CONTENT deve ser HTML completo, sem markdown."
+                        "Você é um jornalista esportivo especializado em futebol brasileiro.\n"
+                        "Escreva apenas com base nos dados fornecidos em main_doc e related_docs.\n"
+                        "Nunca invente fatos, resultados, nomes de jogadores, escalações ou\n"
+                        "transferências que não estejam explicitamente nos dados recebidos.\n"
+                        "Se os dados forem insuficientes para um artigo completo, use apenas\n"
+                        "o que está disponível e sinalize a limitação com linguagem jornalística\n"
+                        "apropriada (ex: 'segundo informações iniciais', 'conforme apurado').\n\n"
+                        "Identidade visual dos clubes — respeitar rigorosamente:\n"
+                        "- Flamengo: vermelho e preto\n"
+                        "- Palmeiras: verde e branco\n"
+                        "- Corinthians: preto e branco\n"
+                        "- Vasco: preto e branco (cruz de Malta)\n"
+                        "- Santos: branco e preto\n"
+                        "- São Paulo: tricolor (vermelho, preto e branco)\n"
+                        "- Cruzeiro: azul e branco\n"
+                        "- Atlético-MG: preto e branco (Galo)\n"
+                        "- Fortaleza: azul, vermelho e preto (Leão do Pici)\n"
+                        "- Bahia: azul e vermelho (Esquadrão de Aço)\n"
+                        "- Grêmio: azul, preto e branco (Tricolor Gaúcho)\n\n"
+                        "Nunca mencionar cores, símbolos ou características visuais de um clube\n"
+                        "em um artigo de outro clube. Nunca confundir rivais ou misturar\n"
+                        "identidades de times diferentes no mesmo texto.\n\n"
+                        "Retorne APENAS JSON válido no formato solicitado. O campo CONTENT deve\n"
+                        "ser HTML completo, sem markdown."
                     ),
                 },
                 {
@@ -890,6 +1026,8 @@ def task_process_club(index: int, **kwargs):
         title = (generated.get("TITLE") or "").strip()
         slug = normalize_slug((generated.get("SLUG") or "").strip())
         content = (generated.get("CONTENT") or "").strip()
+        if not slug.startswith(f"{club_id}-"):
+            slug = normalize_slug(f"{club_id}-{slug}")
 
         if not title or not slug or not content:
             result = fail("ETAPA_C", "Campos obrigatórios TITLE/SLUG/CONTENT ausentes")
@@ -912,12 +1050,14 @@ def task_process_club(index: int, **kwargs):
     image_url = None
     try:
         main_summary = main_compact.get("summary") or ""
+        club_colors = CLUB_COLORS.get(club_id, "cores oficiais do clube")
         image_prompt = (
             "Fotojornalismo esportivo ultrarrealista, futebol brasileiro profissional. "
-            f"Clube em foco: {club_name}. "
+            f"Clube: {club_name}. "
+            f"Cores predominantes: {club_colors}. "
             f"Contexto: {title}. {main_summary}. "
-            "Sem texto, sem logotipos, sem marcas d'água, iluminação natural, "
-            "câmera profissional 35mm, estilo editorial esportivo."
+            "Sem escudos, logos ou símbolos de clubes. Sem texto. Sem watermark. "
+            "Iluminação natural, câmera profissional 35mm, estilo editorial esportivo."
         )
         image_prompt = image_prompt[:1000]
 
@@ -992,21 +1132,36 @@ def task_process_club(index: int, **kwargs):
             figure_html = (
                 '<figure class="article-image">\n'
                 f'  <img src="{media_url}" alt="{title}"/>\n'
-                '  <figcaption>Imagem: <a href="https://openai.com" rel="nofollow noopener">'
-                "OpenAI DALL-E 3</a></figcaption>\n"
+                "  <figcaption>Imagem: OpenAI DALL-E 3</figcaption>\n"
                 "</figure>"
             )
-
-            if "<!--IMAGE_HERE-->" in content:
-                content = content.replace("<!--IMAGE_HERE-->", figure_html, 1)
-            elif re.search(r"</h1>", content, flags=re.IGNORECASE):
-                content = re.sub(r"</h1>", f"</h1>\n{figure_html}", content, count=1, flags=re.IGNORECASE)
-            else:
-                content = f"{figure_html}\n{content}"
+            content = ensure_single_article_figure(content, figure_html)
         else:
             content = content.replace("<!--IMAGE_HERE-->", "")
+
+        figure_count = len(
+            re.findall(
+                r'<figure\s+class=["\']article-image["\']>',
+                content or "",
+                flags=re.IGNORECASE,
+            )
+        )
+        if figure_count != 1:
+            result = fail("ETAPA_F", f"HTML final inválido: esperada 1 figure article-image, encontrado {figure_count}")
+            ti.xcom_push(key="result", value=result)
+            return result
     except Exception as exc:
         result = fail("ETAPA_F", str(exc))
+        ti.xcom_push(key="result", value=result)
+        return result
+
+    # ETAPA F2 — Sanitização final de links e link obrigatório do clube
+    try:
+        content = remove_external_links(content)
+        content = enforce_club_page_links(content, club_page_url)
+        content = ensure_mandatory_club_link(content, club_page_url, club_name)
+    except Exception as exc:
+        result = fail("ETAPA_F2", str(exc))
         ti.xcom_push(key="result", value=result)
         return result
 
@@ -1014,20 +1169,13 @@ def task_process_club(index: int, **kwargs):
     try:
         category_id = resolve_or_create_wp_term("categories", club_id, CLUBS[club_id]["name"])
         if not category_id:
-            category_id = 1
-            logging.warning(
-                "club_id=%s ETAPA_G sem categoria específica; usando fallback category_id=%s",
-                club_id,
-                category_id,
-            )
+            result = fail("ETAPA_G", "Categoria do clube não encontrada/criada")
+            ti.xcom_push(key="result", value=result)
+            return result
     except Exception as exc:
-        category_id = 1
-        logging.warning(
-            "club_id=%s ETAPA_G falhou com exceção; usando fallback category_id=%s erro=%s",
-            club_id,
-            category_id,
-            exc,
-        )
+        result = fail("ETAPA_G", str(exc))
+        ti.xcom_push(key="result", value=result)
+        return result
 
     # ETAPA H — Resolver tags do post
     try:

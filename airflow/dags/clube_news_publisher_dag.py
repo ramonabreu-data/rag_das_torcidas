@@ -429,47 +429,63 @@ def task_fetch_wp_recent_posts(**kwargs):
         "_fields": "id,slug,title,_embedded",
     }
 
-    try:
-        response = requests.get(url, headers={"Authorization": WP_AUTH}, params=params, timeout=20)
-        response.raise_for_status()
-        posts = response.json() or []
+    last_wp_error = None
+    for attempt in range(1, 4):
+        try:
+            response = requests.get(url, headers={"Authorization": WP_AUTH}, params=params, timeout=20)
+            response.raise_for_status()
+            posts = response.json() or []
 
-        for post in posts:
-            title_rendered = ((post.get("title") or {}).get("rendered") or "").strip()
-            clean_title = strip_html(title_rendered)
-            posts_out.append(
-                {
-                    "id": post.get("id"),
-                    "slug": post.get("slug"),
-                    "title": clean_title,
-                }
-            )
+            for post in posts:
+                title_rendered = ((post.get("title") or {}).get("rendered") or "").strip()
+                clean_title = strip_html(title_rendered)
+                posts_out.append(
+                    {
+                        "id": post.get("id"),
+                        "slug": post.get("slug"),
+                        "title": clean_title,
+                    }
+                )
 
-            embedded = post.get("_embedded") or {}
-            terms_groups = embedded.get("wp:term") or []
-            found_club = None
-            for group in terms_groups:
-                if not isinstance(group, list):
-                    continue
-                for term in group:
-                    term_slug = term.get("slug") or ""
-                    club_id = map_name_to_club_id(term_slug)
-                    if club_id:
-                        found_club = club_id
+                embedded = post.get("_embedded") or {}
+                terms_groups = embedded.get("wp:term") or []
+                found_club = None
+                for group in terms_groups:
+                    if not isinstance(group, list):
+                        continue
+                    for term in group:
+                        term_slug = term.get("slug") or ""
+                        club_id = map_name_to_club_id(term_slug)
+                        if club_id:
+                            found_club = club_id
+                            break
+                    if found_club:
                         break
-                if found_club:
-                    break
 
-            if found_club and found_club not in recent_club_ids:
-                recent_club_ids.append(found_club)
+                if found_club and found_club not in recent_club_ids:
+                    recent_club_ids.append(found_club)
 
-        logging.info(
-            "WordPress retornou %s posts recentes; clubes recentes detectados: %s",
-            len(posts_out),
-            recent_club_ids,
+            logging.info(
+                "WordPress retornou %s posts recentes; clubes recentes detectados: %s",
+                len(posts_out),
+                recent_club_ids,
+            )
+            last_wp_error = None
+            break
+        except Exception as exc:
+            last_wp_error = exc
+            logging.warning(
+                "Falha ao buscar posts recentes no WordPress (tentativa %s/3): %s",
+                attempt,
+                exc,
+            )
+            time.sleep(min(2 * attempt, 6))
+
+    if last_wp_error:
+        raise AirflowFailException(
+            "WordPress indisponível para leitura da API. "
+            f"Erro final após retries: {last_wp_error}"
         )
-    except Exception as exc:
-        logging.warning("Falha ao buscar posts recentes no WordPress: %s", exc)
 
     ti.xcom_push(key="recent_posts", value=posts_out)
     ti.xcom_push(key="recent_club_ids", value=recent_club_ids)

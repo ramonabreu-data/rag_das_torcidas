@@ -564,6 +564,26 @@ def resolve_or_create_wp_term(endpoint: str, slug: str, name: str) -> int | None
     return None
 
 
+def find_wp_post_by_slug(slug: str) -> dict | None:
+    """Busca post por slug para recuperação após falha de conexão no publish."""
+    if not slug:
+        return None
+    try:
+        response = wp_request(
+            "GET",
+            "/posts",
+            params={"per_page": 5, "slug": slug, "_fields": "id,slug,status"},
+            timeout=20,
+            retries=2,
+        )
+        posts = response.json() or []
+        if posts:
+            return posts[0]
+    except Exception as exc:
+        logging.warning("Falha ao recuperar post por slug=%s erro=%s", slug, exc)
+    return None
+
+
 def build_state(today: str) -> dict:
     return {
         "date": today,
@@ -1254,16 +1274,55 @@ def task_process_club(index: int, **kwargs):
         if media_id:
             publish_payload["featured_media"] = media_id
 
-        publish_response = wp_request(
-            "POST",
-            "/posts",
-            json_payload=publish_payload,
-            timeout=30,
-            retries=3,
-        )
-        publish_json = publish_response.json() or {}
-        if publish_json.get("status") != "publish":
+        # Reduz chance de reset simultâneo quando 3 tasks publicam no mesmo instante.
+        if index > 0:
+            time.sleep(index)
+
+        publish_json = None
+        last_publish_error = None
+        publish_attempts = 3
+        for attempt in range(1, publish_attempts + 1):
+            try:
+                publish_response = wp_request(
+                    "POST",
+                    "/posts",
+                    json_payload=publish_payload,
+                    headers={"Connection": "close"},
+                    timeout=30,
+                    retries=3,
+                )
+                publish_json = publish_response.json() or {}
+                break
+            except Exception as exc:
+                last_publish_error = exc
+                recovered = find_wp_post_by_slug(slug)
+                if recovered and recovered.get("id"):
+                    publish_json = recovered
+                    logging.warning(
+                        "club_id=%s ETAPA_I conexão falhou, mas post recuperado por slug=%s id=%s",
+                        club_id,
+                        slug,
+                        recovered.get("id"),
+                    )
+                    break
+                if attempt < publish_attempts:
+                    wait_seconds = min(2 * attempt, 8)
+                    logging.warning(
+                        "club_id=%s ETAPA_I tentativa %s/%s falhou no publish. retry em %ss erro=%s",
+                        club_id,
+                        attempt,
+                        publish_attempts,
+                        wait_seconds,
+                        exc,
+                    )
+                    time.sleep(wait_seconds)
+
+        if not publish_json:
+            raise AirflowException(f"Publish sem resposta válida após retries. erro={last_publish_error}")
+
+        if publish_json.get("status") and publish_json.get("status") != "publish":
             raise AirflowException(f"Post não publicado. status={publish_json.get('status')}")
+
         wp_post_id = publish_json.get("id")
         if not wp_post_id:
             raise AirflowException("Resposta sem id do post")

@@ -28,19 +28,20 @@ ES_MAX_DOCS = 80
 
 TZ_FORTALEZA = ZoneInfo("America/Fortaleza")
 STATE_KEY_PREFIX = "clube_news_state_"
+USED_DOCS_VARIABLE = "clube_news_used_docs"
 
 CLUBS = {
-    "flamengo": {"name": "FLAMENGO", "page": "/clube/flamengo/"},
-    "palmeiras": {"name": "PALMEIRAS", "page": "/clube/palmeiras/"},
-    "corinthians": {"name": "CORINTHIANS", "page": "/clube/corinthians/"},
-    "vasco": {"name": "VASCO", "page": "/clube/vasco/"},
-    "santos": {"name": "SANTOS", "page": "/clube/santos/"},
-    "sao-paulo": {"name": "SÃO PAULO", "page": "/clube/sao-paulo/"},
-    "cruzeiro": {"name": "CRUZEIRO", "page": "/clube/cruzeiro/"},
-    "atletico-mg": {"name": "ATLÉTICO-MG", "page": "/clube/atletico-mg/"},
-    "fortaleza": {"name": "FORTALEZA", "page": "/clube/fortaleza/"},
-    "bahia": {"name": "BAHIA", "page": "/clube/bahia/"},
-    "gremio": {"name": "GRÊMIO-RS", "page": "/clube/gremio/"},
+    "flamengo": {"name": "FLAMENGO", "page_url": "https://ups1tride.com/flamengo/"},
+    "palmeiras": {"name": "PALMEIRAS", "page_url": "https://ups1tride.com/plameiras/"},
+    "corinthians": {"name": "CORINTHIANS", "page_url": "https://ups1tride.com/corinthians/"},
+    "vasco": {"name": "VASCO", "page_url": "https://ups1tride.com/vasco/"},
+    "santos": {"name": "SANTOS", "page_url": "https://ups1tride.com/santos/"},
+    "sao-paulo": {"name": "SÃO PAULO", "page_url": "https://ups1tride.com/sao-paulo/"},
+    "cruzeiro": {"name": "CRUZEIRO", "page_url": "https://ups1tride.com/cruzeiro/"},
+    "atletico-mg": {"name": "ATLÉTICO-MG", "page_url": "https://ups1tride.com/atletico-mg/"},
+    "fortaleza": {"name": "FORTALEZA", "page_url": "https://ups1tride.com/fortaleza/"},
+    "bahia": {"name": "BAHIA", "page_url": "https://ups1tride.com/bahia/"},
+    "gremio": {"name": "GRÊMIO-RS", "page_url": "https://ups1tride.com/gremio-rs/"},
 }
 
 CLUB_COLORS = {
@@ -70,6 +71,31 @@ CLUB_PRIORITY = [
     "bahia",
     "gremio",
 ]
+
+DATA_CONTRACT = {
+    "instrucoes_criticas": [
+        "Escreva APENAS com base nos campos title, summary, snippet e url de main_doc.",
+        "Se summary e snippet estiverem vazios, use apenas o title disponível.",
+        "Nunca inferir, completar ou extrapolar informações além do que está nos dados.",
+        "Nunca mencionar jogadores, técnicos, placares ou datas que não estejam nos dados.",
+        "Nunca citar nomes de pessoas que não apareçam literalmente nos dados recebidos.",
+        "Nunca inventar declarações ou falas entre aspas.",
+        "Se os dados forem insuficientes para 750 palavras, expanda o contexto histórico",
+        "do clube usando apenas fatos amplamente conhecidos do futebol brasileiro,",
+        "deixando claro que são informações de contexto geral, não da notícia em questão.",
+        "Nunca misturar informações de related_docs com o clube principal do artigo.",
+        "Usar related_docs apenas como contexto secundário, nunca como fato principal.",
+    ],
+    "proibicoes_absolutas": [
+        "Não inventar transferências, contratações ou rescisões não confirmadas nos dados.",
+        "Não inventar resultados de jogos não mencionados nos dados.",
+        "Não inventar escalações, lesões ou suspensões não mencionadas nos dados.",
+        "Não usar frases como 'segundo fontes', 'soube apurar' ou similares.",
+        "Não citar sites, portais ou veículos de comunicação concorrentes.",
+        "Não incluir links para domínios externos ao ups1tride.com.",
+        "Não repetir o mesmo ângulo ou lide de artigos anteriores listados em recent_posts.",
+    ],
+}
 
 NAME_TO_ID = {
     "flamengo": "flamengo",
@@ -321,6 +347,48 @@ def remove_external_links(content: str, internal_domain: str = "ups1tride.com") 
     )
 
 
+def validate_content_hallucination(content: str, main_doc: dict) -> list[str]:
+    """
+    Verifica sinais de alucinação no conteúdo gerado.
+    Retorna lista de alertas (não bloqueia publicação, apenas loga).
+    """
+    alerts = []
+
+    fake_quotes = re.findall(r'"([^"]{40,})"', content or "")
+    if fake_quotes:
+        alerts.append(f"Possível declaração inventada detectada: {len(fake_quotes)} trecho(s) entre aspas longas.")
+
+    speculation_phrases = [
+        "deve ser",
+        "provavelmente",
+        "segundo fontes",
+        "soube apurar",
+        "segundo apurou",
+        "tudo indica",
+        "ao que tudo indica",
+        "se confirmar",
+        "negociações avançadas",
+        "a caminho",
+    ]
+    content_lower = (content or "").lower()
+    for phrase in speculation_phrases:
+        if phrase.lower() in content_lower:
+            alerts.append(f"Expressão especulativa detectada: '{phrase}'")
+
+    external_links = re.findall(
+        r'href=["\']https?://(?!ups1tride\.com)[^"\']+["\']',
+        content or "",
+        flags=re.IGNORECASE,
+    )
+    if external_links:
+        alerts.append(f"Links externos detectados: {external_links}")
+
+    for alert in alerts:
+        logging.warning("[ANTI-ALUCINAÇÃO] club=%s | %s", main_doc.get("club_id", "?"), alert)
+
+    return alerts
+
+
 def enforce_club_page_links(content: str, club_page_url: str) -> str:
     """Força todos os links internos a usarem a club_page_url do clube."""
 
@@ -336,63 +404,101 @@ def enforce_club_page_links(content: str, club_page_url: str) -> str:
     )
 
 
-def ensure_mandatory_club_link(content: str, club_page_url: str, club_name: str) -> str:
-    display_name = club_name.strip().title()
-    mandatory_anchor = f'<a href="{club_page_url}">Mais notícias do {display_name}</a>'
+def insert_single_article_figure(content: str, figure: str) -> str:
+    content = content or ""
+
+    # Passo 1: remover marcadores duplicados, manter só o primeiro.
+    first_marker_pos = content.find("<!--IMAGE_HERE-->")
+    if first_marker_pos != -1:
+        before = content[: first_marker_pos + len("<!--IMAGE_HERE-->")]
+        after = content[first_marker_pos + len("<!--IMAGE_HERE-->") :].replace("<!--IMAGE_HERE-->", "")
+        content = before + after
+        # Passo 2: substituir o único marcador pela figura.
+        content = content.replace("<!--IMAGE_HERE-->", figure, 1)
+    elif re.search(r"</h1>", content, flags=re.IGNORECASE):
+        content = re.sub(r"</h1>", f"</h1>\n{figure}", content, count=1, flags=re.IGNORECASE)
+    else:
+        content = f"{figure}\n{content}"
+
+    # Passo 3: verificar e remover figuras duplicadas no HTML final.
+    figures = re.findall(
+        r'<figure[^>]*class=["\']article-image["\'][^>]*>.*?</figure>',
+        content,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if len(figures) > 1:
+        logging.warning("Múltiplas figuras detectadas (%s). Removendo excedentes.", len(figures))
+        for extra_figure in figures[1:]:
+            content = content.replace(extra_figure, "", 1)
+
+    if not re.search(r'<figure[^>]*class=["\']article-image["\']', content, flags=re.IGNORECASE):
+        content = f"{figure}\n{content}"
+
+    return content
+
+
+def insert_mandatory_club_link(content: str, club_id: str) -> str:
+    club_name = CLUBS[club_id]["name"]
+    page_url = CLUBS[club_id]["page_url"]
+    link_html = (
+        f'<p>Acompanhe todas as notícias do {club_name} em '
+        f'<a href="{page_url}">nossa página dedicada ao clube</a>.</p>'
+    )
     if re.search(
         r'<a\s+href=["\']'
-        + re.escape(club_page_url)
-        + r'["\'][^>]*>\s*Mais notícias do .*?</a>',
+        + re.escape(page_url)
+        + r'["\'][^>]*>\s*nossa página dedicada ao clube\s*</a>',
         content or "",
         flags=re.IGNORECASE | re.DOTALL,
     ):
         return content
-    return f"{content}\n<p>{mandatory_anchor}</p>"
 
-
-def ensure_single_article_figure(content: str, figure_html: str) -> str:
     content = content or ""
-    content = re.sub(
-        r'<figure[^>]*class=["\'][^"\']*article-image[^"\']*["\'][\s\S]*?</figure>',
-        "",
-        content,
-        flags=re.IGNORECASE,
-    )
-    content = re.sub(r"<img\b[^>]*>", "", content, flags=re.IGNORECASE)
-    content = re.sub(
-        r"(<!--IMAGE_HERE-->)(\s*<!--IMAGE_HERE-->)+",
-        "<!--IMAGE_HERE-->",
-        content,
-    )
+    last_p = content.lower().rfind("</p>")
+    last_div = content.lower().rfind("</div>")
+    insert_pos = max(last_p, last_div)
+    if insert_pos != -1:
+        return f"{content[:insert_pos]}{link_html}\n{content[insert_pos:]}"
+    return f"{content}\n{link_html}"
 
-    if "<!--IMAGE_HERE-->" in content:
-        content = content.replace("<!--IMAGE_HERE-->", figure_html, 1)
-        content = content.replace("<!--IMAGE_HERE-->", "")
-    elif re.search(r"</h1>", content, flags=re.IGNORECASE):
-        content = re.sub(r"</h1>", f"</h1>\n{figure_html}", content, count=1, flags=re.IGNORECASE)
-    else:
-        content = f"{figure_html}\n{content}"
 
-    figure_pattern = r'(<figure\s+class=["\']article-image["\'][\s\S]*?</figure>)'
-    figures = re.findall(figure_pattern, content, flags=re.IGNORECASE)
-    if not figures:
-        content = f"{figure_html}\n{content}"
-        figures = re.findall(figure_pattern, content, flags=re.IGNORECASE)
+def increase_content_font_size(content: str) -> str:
+    content = content or ""
+    if re.search(r'style=["\'][^"\']*font-size', content, flags=re.IGNORECASE):
+        return content
+    return f'<div class="article-body" style="font-size: 1.08rem; line-height: 1.8;">\n{content}\n</div>'
 
-    if len(figures) > 1:
-        first = figures[0]
-        content = re.sub(figure_pattern, "", content, flags=re.IGNORECASE)
-        content = f"{first}\n{content}"
 
-    if '<figure class="article-image">' not in content:
-        content = re.sub(
-            r"<figure\s+class=['\"]article-image['\"]>",
-            '<figure class="article-image">',
-            content,
-            count=1,
-            flags=re.IGNORECASE,
+def load_used_doc_ids() -> list[str]:
+    raw = Variable.get(USED_DOCS_VARIABLE, default_var="[]")
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        parsed = []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed if str(item).strip() != ""]
+
+
+def get_club_page_id(club_id: str) -> int | None:
+    """Busca o ID da página do clube no WordPress pelo slug."""
+    slug = CLUBS[club_id]["page_url"].rstrip("/").split("/")[-1]
+    try:
+        response = wp_request(
+            "GET",
+            "/pages",
+            params={"slug": slug, "_fields": "id,slug,link", "per_page": 1},
+            timeout=10,
+            retries=2,
         )
-    return content
+        pages = response.json() or []
+        if pages:
+            return pages[0].get("id")
+    except Exception as exc:
+        logging.warning("Falha ao buscar página do clube slug=%s erro=%s", slug, exc)
+
+    logging.warning("Página do clube não encontrada para slug: %s", slug)
+    return None
 
 
 def parse_published_at(value: str) -> datetime:
@@ -478,12 +584,16 @@ def compact_doc_for_prompt(doc: dict) -> dict:
     source = doc.get("source_name") or doc.get("source") or ""
     if isinstance(source, dict):
         source = source.get("name") or ""
+    club_id = extract_doc_club_id(doc) or (doc.get("club_id") or "")
     return {
+        "club_id": club_id,
         "title": (doc.get("title") or doc.get("headline") or "").strip(),
         "summary": (doc.get("summary") or doc.get("description") or "").strip(),
+        "snippet": (doc.get("snippet") or doc.get("excerpt") or "").strip(),
         "url": extract_doc_url(doc),
         "published_at": (doc.get("published_at") or "").strip(),
         "source_name": str(source).strip(),
+        "_id": (doc.get("_id") or "").strip(),
     }
 
 
@@ -590,6 +700,7 @@ def build_state(today: str) -> dict:
         "posted": {},
         "last_picked_clubs": [],
         "last_run_at": None,
+        "used_doc_ids": [],
     }
 
 
@@ -630,46 +741,91 @@ def task_load_state(**kwargs):
     state.setdefault("posted", {})
     state.setdefault("last_picked_clubs", [])
     state.setdefault("last_run_at", None)
+    state.setdefault("used_doc_ids", [])
+
+    used_doc_ids = load_used_doc_ids()
+    state["used_doc_ids"] = used_doc_ids
 
     ti.xcom_push(key="state", value=state)
     ti.xcom_push(key="today", value=today)
     ti.xcom_push(key="run_id", value=run_id)
     ti.xcom_push(key="state_key", value=state_key)
+    ti.xcom_push(key="used_doc_ids", value=used_doc_ids)
 
-    logging.info("State carregado para %s com %s clubes já postados.", today, len(state["posted"]))
+    logging.info(
+        "State carregado para %s com %s clubes já postados e %s docs usados.",
+        today,
+        len(state["posted"]),
+        len(state["used_doc_ids"]),
+    )
     return state
 
 
 def task_fetch_elasticsearch(**kwargs):
     ti = kwargs["ti"]
+    state = ti.xcom_pull(task_ids="load_state", key="state") or {}
+    already_posted_doc_ids = state.get("used_doc_ids") or []
     url = f"{ES_HOST.rstrip('/')}/{ES_INDEX}/_search"
-    payload = {
-        "size": ES_MAX_DOCS,
-        "sort": [{"published_at": "desc"}],
-        "query": {"match_all": {}},
-    }
+    docs_by_club: dict[str, list[dict]] = {}
 
-    docs = []
-    try:
-        response = requests.post(url, json=payload, timeout=20)
-        if not response.ok:
-            logging.warning(
-                "Consulta ao Elasticsearch falhou. url=%s status=%s body=%s",
-                url,
-                response.status_code,
-                (response.text or "")[:400],
-            )
-        response.raise_for_status()
-        data = response.json() or {}
-        hits = (((data.get("hits") or {}).get("hits")) or [])
-        docs = [(item.get("_source") or {}) for item in hits if item.get("_source")]
-        logging.info("Elasticsearch retornou %s documentos. host=%s index=%s", len(docs), ES_HOST, ES_INDEX)
-    except Exception as exc:
-        logging.warning("Falha ao conectar/consultar Elasticsearch: %s", exc)
-        docs = []
+    for club_id, club_cfg in CLUBS.items():
+        must_not = [{"ids": {"values": already_posted_doc_ids}}]
 
-    ti.xcom_push(key="es_docs", value=docs)
-    return docs
+        payload = {
+            "size": 10,
+            "sort": [{"published_at": {"order": "desc"}}],
+            "query": {
+                "bool": {
+                    "must": [
+                        {
+                            "bool": {
+                                "should": [
+                                    {"term": {"club_id": club_id}},
+                                    {"match": {"club_name": club_cfg["name"]}},
+                                ],
+                                "minimum_should_match": 1,
+                            }
+                        }
+                    ],
+                    "must_not": must_not,
+                }
+            },
+        }
+
+        try:
+            response = requests.post(url, json=payload, timeout=20)
+            if not response.ok:
+                logging.warning(
+                    "Consulta ES falhou club_id=%s status=%s body=%s",
+                    club_id,
+                    response.status_code,
+                    (response.text or "")[:400],
+                )
+            response.raise_for_status()
+
+            data = response.json() or {}
+            hits = (((data.get("hits") or {}).get("hits")) or [])
+            docs = []
+            for item in hits:
+                source = item.get("_source") or {}
+                if not isinstance(source, dict):
+                    continue
+                source["_id"] = item.get("_id")
+                source["club_id"] = source.get("club_id") or club_id
+                docs.append(source)
+
+            docs = sorted(docs, key=lambda item: parse_published_at(item.get("published_at")), reverse=True)
+
+            if len(docs) < 1:
+                logging.warning("club_id=%s sem documentos novos suficientes no Elasticsearch.", club_id)
+                continue
+
+            docs_by_club[club_id] = docs
+        except Exception as exc:
+            logging.warning("Falha na consulta ES para club_id=%s erro=%s", club_id, exc)
+
+    ti.xcom_push(key="es_docs", value=docs_by_club)
+    return docs_by_club
 
 
 def task_fetch_wp_recent_posts(**kwargs):
@@ -740,56 +896,29 @@ def task_fetch_wp_recent_posts(**kwargs):
 def task_select_clubs(**kwargs):
     ti = kwargs["ti"]
     state = ti.xcom_pull(task_ids="load_state", key="state") or build_state(get_today_fortaleza())
-    docs = ti.xcom_pull(task_ids="fetch_elasticsearch", key="es_docs") or []
+    docs_by_club = ti.xcom_pull(task_ids="fetch_elasticsearch", key="es_docs") or {}
+    if not isinstance(docs_by_club, dict):
+        docs_by_club = {}
 
-    grouped = {}
-    docs_without_club = 0
-    unmapped_examples = []
-    for doc in docs:
-        if not isinstance(doc, dict):
-            continue
-        club_id = extract_doc_club_id(doc)
-        if not club_id:
-            docs_without_club += 1
-            if len(unmapped_examples) < 3:
-                unmapped_examples.append(
-                    {
-                        "title": doc.get("title"),
-                        "url": extract_doc_url(doc),
-                        "club_id": doc.get("club_id"),
-                        "club": doc.get("club"),
-                        "club_name": doc.get("club_name"),
-                        "metadata_keys": sorted(list((doc.get("metadata") or {}).keys()))
-                        if isinstance(doc.get("metadata"), dict)
-                        else [],
-                    }
-                )
-            continue
-        grouped.setdefault(club_id, []).append(doc)
+    valid_docs_by_club = {
+        club_id: sorted(docs, key=lambda item: parse_published_at(item.get("published_at")), reverse=True)
+        for club_id, docs in docs_by_club.items()
+        if isinstance(docs, list) and len(docs) > 0
+    }
 
-    for club_id in grouped:
-        grouped[club_id] = sorted(
-            grouped[club_id],
-            key=lambda item: parse_published_at(item.get("published_at")),
-            reverse=True,
-        )
-
-    if len(grouped) < 3:
+    if len(valid_docs_by_club) < 3:
         logging.warning(
-            "Documentos insuficientes por clube. docs_total=%s docs_sem_mapeamento=%s clubes_mapeados=%s exemplos_sem_mapeamento=%s",
-            len(docs),
-            docs_without_club,
-            sorted(grouped.keys()),
-            unmapped_examples,
+            "Documentos insuficientes por clube. clubes_disponiveis=%s",
+            sorted(valid_docs_by_club.keys()),
         )
         raise AirflowException(
-            f"Não há clubes suficientes com documentos no ES. Encontrados={len(grouped)}, necessário=3"
+            f"Não há clubes suficientes com documentos no ES. Encontrados={len(valid_docs_by_club)}, necessário=3"
         )
 
     posted_today = set((state.get("posted") or {}).keys())
     last_picked = state.get("last_picked_clubs") or []
 
-    all_clubs_with_docs = list(grouped.keys())
+    all_clubs_with_docs = list(valid_docs_by_club.keys())
     not_posted = [club for club in all_clubs_with_docs if club not in posted_today]
     already_posted = [club for club in all_clubs_with_docs if club in posted_today]
 
@@ -829,8 +958,9 @@ def task_select_clubs(**kwargs):
             {
                 "club_id": club_id,
                 "club_name": club_data["name"],
-                "club_page_url": club_data["page"],
-                "docs_sorted": grouped.get(club_id, []),
+                "club_page_url": club_data["page_url"],
+                "docs_sorted": valid_docs_by_club.get(club_id, []),
+                "data_contract": DATA_CONTRACT,
             }
         )
 
@@ -868,6 +998,7 @@ def task_process_club(index: int, **kwargs):
     club_name = club.get("club_name")
     club_page_url = club.get("club_page_url")
     docs_sorted = club.get("docs_sorted") or []
+    data_contract = club.get("data_contract") or DATA_CONTRACT
 
     def fail(stage: str, error_msg: str) -> dict:
         message = f"{stage}: {error_msg}"
@@ -881,17 +1012,22 @@ def task_process_club(index: int, **kwargs):
 
     # ETAPA A — Selecionar documento principal
     try:
-        if not docs_sorted:
+        used_doc_ids = set(state.get("used_doc_ids") or [])
+        available_docs = [doc for doc in docs_sorted if str(doc.get("_id") or "") not in used_doc_ids]
+        if not available_docs:
+            logging.warning("club_id=%s todos os docs disponíveis já foram utilizados. Pulando clube.", club_id)
             result = fail("ETAPA_A", "Nenhum documento disponível para o clube")
             ti.xcom_push(key="result", value=result)
             return result
-        main_doc = docs_sorted[0]
-        related_docs = docs_sorted[1:6]
+        main_doc = available_docs[0]
+        main_doc_id = str(main_doc.get("_id") or "")
+        related_docs = available_docs[1:6]
         main_compact = compact_doc_for_prompt(main_doc)
         related_compact = [
             {
                 "title": compact_doc_for_prompt(doc).get("title", ""),
                 "summary": compact_doc_for_prompt(doc).get("summary", ""),
+                "snippet": compact_doc_for_prompt(doc).get("snippet", ""),
             }
             for doc in related_docs
         ]
@@ -957,6 +1093,7 @@ def task_process_club(index: int, **kwargs):
                 "club_id": club_id,
                 "club_name": club_name,
                 "club_page_url": club_page_url,
+                "data_contract": data_contract,
                 "main_doc": main_compact,
                 "related_docs": related_compact,
                 "contexto_rotacao": {
@@ -1066,6 +1203,15 @@ def task_process_club(index: int, **kwargs):
         ti.xcom_push(key="result", value=result)
         return result
 
+    # ETAPA C2 — Anti-alucinação e limpeza de links externos
+    try:
+        validate_content_hallucination(content, main_compact)
+        content = remove_external_links(content)
+    except Exception as exc:
+        result = fail("ETAPA_C2", str(exc))
+        ti.xcom_push(key="result", value=result)
+        return result
+
     # ETAPA D — Gerar imagem com DALL-E 3
     image_url = None
     try:
@@ -1149,21 +1295,21 @@ def task_process_club(index: int, **kwargs):
     # ETAPA F — Inserir imagem no CONTENT
     try:
         if media_url:
-            figure_html = (
+            figure = (
                 '<figure class="article-image">\n'
                 f'  <img src="{media_url}" alt="{title}"/>\n'
                 "  <figcaption>Imagem: OpenAI DALL-E 3</figcaption>\n"
                 "</figure>"
             )
-            content = ensure_single_article_figure(content, figure_html)
+            content = insert_single_article_figure(content, figure)
         else:
             content = content.replace("<!--IMAGE_HERE-->", "")
 
         figure_count = len(
             re.findall(
-                r'<figure\s+class=["\']article-image["\']>',
+                r'<figure[^>]*class=["\']article-image["\'][^>]*>.*?</figure>',
                 content or "",
-                flags=re.IGNORECASE,
+                flags=re.IGNORECASE | re.DOTALL,
             )
         )
         if figure_count != 1:
@@ -1175,11 +1321,11 @@ def task_process_club(index: int, **kwargs):
         ti.xcom_push(key="result", value=result)
         return result
 
-    # ETAPA F2 — Sanitização final de links e link obrigatório do clube
+    # ETAPA F2 — Sanitização final de links internos e acabamento de conteúdo
     try:
-        content = remove_external_links(content)
         content = enforce_club_page_links(content, club_page_url)
-        content = ensure_mandatory_club_link(content, club_page_url, club_name)
+        content = insert_mandatory_club_link(content, club_id)
+        content = increase_content_font_size(content)
     except Exception as exc:
         result = fail("ETAPA_F2", str(exc))
         ti.xcom_push(key="result", value=result)
@@ -1262,6 +1408,7 @@ def task_process_club(index: int, **kwargs):
 
     # ETAPA I — Publicar post no WordPress
     try:
+        club_page_id = get_club_page_id(club_id)
         publish_payload = {
             "title": title,
             "content": content,
@@ -1273,6 +1420,10 @@ def task_process_club(index: int, **kwargs):
             publish_payload["tags"] = tag_ids
         if media_id:
             publish_payload["featured_media"] = media_id
+        if club_page_id:
+            publish_payload["parent"] = club_page_id
+        else:
+            logging.warning("club_id=%s publicação seguirá sem parent por ausência de page_id", club_id)
 
         # Reduz chance de reset simultâneo quando 3 tasks publicam no mesmo instante.
         if index > 0:
@@ -1331,6 +1482,7 @@ def task_process_club(index: int, **kwargs):
             "club_id": club_id,
             "status": "success",
             "wp_post_id": wp_post_id,
+            "main_doc_id": main_doc_id,
             "error_msg": "",
         }
         logging.info("club_id=%s publicado com sucesso. wp_post_id=%s", club_id, wp_post_id)
@@ -1359,6 +1511,9 @@ def task_save_state(**kwargs):
 
     state.setdefault("date", today)
     state.setdefault("posted", {})
+    state.setdefault("used_doc_ids", [])
+
+    new_used_doc_ids = []
 
     for result in results:
         if result.get("status") == "success" and result.get("club_id"):
@@ -1366,6 +1521,14 @@ def task_save_state(**kwargs):
                 "at": now_fortaleza_iso(),
                 "wp_post_id": result.get("wp_post_id"),
             }
+            main_doc_id = str(result.get("main_doc_id") or "").strip()
+            if main_doc_id:
+                new_used_doc_ids.append(main_doc_id)
+
+    used_docs = load_used_doc_ids()
+    used_docs = (used_docs + new_used_doc_ids)[-500:]
+    state["used_doc_ids"] = used_docs
+    Variable.set(USED_DOCS_VARIABLE, json.dumps(used_docs, ensure_ascii=False))
 
     state["last_picked_clubs"] = selected_ids
     state["last_run_at"] = now_fortaleza_iso()

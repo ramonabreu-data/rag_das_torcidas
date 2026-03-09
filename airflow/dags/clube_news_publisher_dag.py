@@ -971,9 +971,7 @@ def task_process_club(index: int, **kwargs):
         tag_ids = dedup_ids
 
         if len(tag_ids) < 1:
-            result = fail("ETAPA_H", "Nenhuma tag resolvida")
-            ti.xcom_push(key="result", value=result)
-            return result
+            logging.warning("club_id=%s ETAPA_H sem tags resolvidas; publicando sem tags", club_id)
     except Exception as exc:
         result = fail("ETAPA_H", str(exc))
         ti.xcom_push(key="result", value=result)
@@ -987,8 +985,9 @@ def task_process_club(index: int, **kwargs):
             "slug": slug,
             "status": "publish",
             "categories": [category_id],
-            "tags": tag_ids,
         }
+        if tag_ids:
+            publish_payload["tags"] = tag_ids
         if media_id:
             publish_payload["featured_media"] = media_id
 

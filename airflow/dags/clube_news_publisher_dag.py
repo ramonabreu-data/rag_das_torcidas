@@ -19,13 +19,8 @@ from airflow.utils.trigger_rule import TriggerRule
 # ===========================================================================
 # CREDENCIAIS E CONFIGURAÇÕES GERAIS
 # ===========================================================================
-WP_SITE = "https://ups1tride.com"
-WP_USER = "ddd"
-WP_APP_PASS = "snGZfPrA9l6SWGktAi1yRMVp"
-WP_AUTH = "Basic ZGRkOnNuR1pmUHJBOWw2U1dHa3RBaTF5Uk1WcA=="
-
-# Mantido para referência explícita do enunciado
-_WP_AUTH_CHECK = "Basic " + base64.b64encode(f"{WP_USER}:{WP_APP_PASS}".encode()).decode()
+WP_SITE_DEFAULT = "https://ups1tride.com"
+WP_USER_AGENT_DEFAULT = "n8n"
 
 ES_HOST = os.getenv("ES_HOST") or os.getenv("ELASTICSEARCH_URL", "http://elasticsearch:9200")
 ES_INDEX = "news_articles"
@@ -120,12 +115,145 @@ def now_fortaleza_iso() -> str:
     return datetime.now(TZ_FORTALEZA).isoformat()
 
 
-def wp_headers() -> dict:
-    """Headers padrão para chamadas à API WordPress."""
-    return {
-        "Authorization": WP_AUTH,
+def get_env_or_variable(name: str, default: str | None = None) -> str | None:
+    value = os.getenv(name)
+    if value is not None and str(value).strip() != "":
+        return value
+    return Variable.get(name, default_var=default)
+
+
+def as_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def as_int(value: str | None, default: int) -> int:
+    try:
+        return int(str(value))
+    except Exception:
+        return default
+
+
+def wp_base_url() -> str:
+    raw_site = get_env_or_variable("WP_SITE", WP_SITE_DEFAULT) or WP_SITE_DEFAULT
+    return raw_site.strip().rstrip("/")
+
+
+def wp_verify_ssl() -> bool:
+    allow_unauthorized = as_bool(get_env_or_variable("WP_ALLOW_UNAUTHORIZED_CERTS", "false"), default=False)
+    return not allow_unauthorized
+
+
+def wp_auth_header() -> str:
+    explicit_auth = get_env_or_variable("WP_AUTH", None)
+    if explicit_auth:
+        return explicit_auth
+
+    wp_user = get_env_or_variable("WP_USER", None)
+    wp_pass = get_env_or_variable("WP_APP_PASS", None)
+    if wp_user and wp_pass:
+        encoded = base64.b64encode(f"{wp_user}:{wp_pass}".encode()).decode()
+        return f"Basic {encoded}"
+
+    raise AirflowException(
+        "Credenciais do WordPress ausentes. Defina WP_USER e WP_APP_PASS "
+        "(ou WP_AUTH) via variável de ambiente ou Airflow Variable."
+    )
+
+
+def wp_headers(extra_headers: dict | None = None, include_auth: bool = True) -> dict:
+    """Headers padrão estilo n8n para chamadas à API WordPress."""
+    headers = {
+        "Accept": "application/json",
         "Content-Type": "application/json",
+        "User-Agent": get_env_or_variable("WP_USER_AGENT", WP_USER_AGENT_DEFAULT) or WP_USER_AGENT_DEFAULT,
     }
+    if include_auth:
+        headers["Authorization"] = wp_auth_header()
+    if extra_headers:
+        headers.update(extra_headers)
+    return headers
+
+
+def wp_request(
+    method: str,
+    resource: str,
+    *,
+    params: dict | None = None,
+    json_payload: dict | list | None = None,
+    data: bytes | str | None = None,
+    headers: dict | None = None,
+    timeout: int | None = None,
+    include_auth: bool = True,
+    retries: int | None = None,
+) -> requests.Response:
+    """Cliente WP centralizado (padrão n8n): auth básica, User-Agent e SSL configurável."""
+    if resource.startswith("http://") or resource.startswith("https://"):
+        url = resource
+    else:
+        path = resource if resource.startswith("/") else f"/{resource}"
+        url = f"{wp_base_url()}/wp-json/wp/v2{path}"
+
+    max_retries = max(1, retries or as_int(get_env_or_variable("WP_MAX_RETRIES", "3"), 3))
+    timeout_seconds = timeout or as_int(get_env_or_variable("WP_TIMEOUT_SECONDS", "30"), 30)
+    backoff_base = max(1, as_int(get_env_or_variable("WP_RETRY_BACKOFF_SECONDS", "2"), 2))
+    verify_ssl = wp_verify_ssl()
+    req_headers = wp_headers(headers, include_auth=include_auth)
+
+    last_error: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.request(
+                method=method.upper(),
+                url=url,
+                headers=req_headers,
+                params=params,
+                json=json_payload,
+                data=data,
+                timeout=timeout_seconds,
+                verify=verify_ssl,
+            )
+            if 200 <= response.status_code < 300:
+                return response
+
+            body_preview = (response.text or "")[:250]
+            retriable_status = response.status_code in {408, 425, 429, 500, 502, 503, 504}
+            error = AirflowException(
+                f"WordPress {method.upper()} {url} falhou com status {response.status_code}. "
+                f"body={body_preview}"
+            )
+            if not retriable_status:
+                raise error
+            last_error = error
+        except requests.RequestException as exc:
+            last_error = exc
+
+        if attempt < max_retries:
+            logging.warning(
+                "WordPress request tentativa %s/%s falhou. method=%s url=%s erro=%s",
+                attempt,
+                max_retries,
+                method.upper(),
+                url,
+                last_error,
+            )
+            time.sleep(min(backoff_base * attempt, 15))
+
+    raise AirflowException(
+        f"WordPress indisponível após {max_retries} tentativas. "
+        f"method={method.upper()} url={url} erro_final={last_error}"
+    )
+
+
+def wp_healthcheck() -> None:
+    """Replica validação de credencial do n8n (GET /users)."""
+    wp_request("GET", "/users", params={"per_page": 1, "_fields": "id"}, timeout=20, retries=2)
 
 
 def openai_headers() -> dict:
@@ -288,40 +416,41 @@ def detect_topic_tags(text: str) -> list[dict]:
 
 def resolve_or_create_wp_term(endpoint: str, slug: str, name: str) -> int | None:
     """Busca um term (category ou tag) no WP pelo slug. Cria se não existir. Retorna o ID."""
-    base = f"{WP_SITE}/wp-json/wp/v2/{endpoint}"
+    resource = f"/{endpoint}"
 
-    for headers in (wp_headers(), {"Content-Type": "application/json"}):
+    for include_auth in (True, False):
         try:
-            response = requests.get(
-                base,
-                headers=headers,
+            response = wp_request(
+                "GET",
+                resource,
                 params={"per_page": 100, "slug": slug, "_fields": "id,slug,name"},
                 timeout=20,
+                include_auth=include_auth,
+                retries=2,
             )
-            if response.ok:
-                terms = response.json() or []
-                if terms:
-                    return terms[0].get("id")
+            terms = response.json() or []
+            if terms:
+                return terms[0].get("id")
         except Exception as exc:
-            logging.error("Falha ao buscar term endpoint=%s slug=%s erro=%s", endpoint, slug, exc)
+            logging.error(
+                "Falha ao buscar term endpoint=%s slug=%s include_auth=%s erro=%s",
+                endpoint,
+                slug,
+                include_auth,
+                exc,
+            )
 
     try:
-        create_response = requests.post(
-            base,
-            headers=wp_headers(),
-            json={"name": name, "slug": slug},
+        create_response = wp_request(
+            "POST",
+            resource,
+            json_payload={"name": name, "slug": slug},
             timeout=20,
+            include_auth=True,
+            retries=2,
         )
-        if create_response.status_code in (200, 201):
-            return create_response.json().get("id")
-
-        logging.error(
-            "Falha ao criar term endpoint=%s slug=%s status=%s body=%s",
-            endpoint,
-            slug,
-            create_response.status_code,
-            create_response.text[:400],
-        )
+        created = create_response.json() or {}
+        return created.get("id")
     except Exception as exc:
         logging.error("Erro ao criar term endpoint=%s slug=%s erro=%s", endpoint, slug, exc)
 
@@ -422,69 +551,58 @@ def task_fetch_wp_recent_posts(**kwargs):
     posts_out = []
     recent_club_ids = []
 
-    url = f"{WP_SITE}/wp-json/wp/v2/posts"
-    params = {
-        "per_page": 10,
-        "_embed": 1,
-        "_fields": "id,slug,title,_embedded",
-    }
+    try:
+        wp_healthcheck()
+        response = wp_request(
+            "GET",
+            "/posts",
+            params={
+                "per_page": 10,
+                "_embed": 1,
+                "_fields": "id,slug,title,_embedded",
+            },
+            timeout=20,
+        )
+        posts = response.json() or []
 
-    last_wp_error = None
-    for attempt in range(1, 4):
-        try:
-            response = requests.get(url, headers={"Authorization": WP_AUTH}, params=params, timeout=20)
-            response.raise_for_status()
-            posts = response.json() or []
+        for post in posts:
+            title_rendered = ((post.get("title") or {}).get("rendered") or "").strip()
+            clean_title = strip_html(title_rendered)
+            posts_out.append(
+                {
+                    "id": post.get("id"),
+                    "slug": post.get("slug"),
+                    "title": clean_title,
+                }
+            )
 
-            for post in posts:
-                title_rendered = ((post.get("title") or {}).get("rendered") or "").strip()
-                clean_title = strip_html(title_rendered)
-                posts_out.append(
-                    {
-                        "id": post.get("id"),
-                        "slug": post.get("slug"),
-                        "title": clean_title,
-                    }
-                )
-
-                embedded = post.get("_embedded") or {}
-                terms_groups = embedded.get("wp:term") or []
-                found_club = None
-                for group in terms_groups:
-                    if not isinstance(group, list):
-                        continue
-                    for term in group:
-                        term_slug = term.get("slug") or ""
-                        club_id = map_name_to_club_id(term_slug)
-                        if club_id:
-                            found_club = club_id
-                            break
-                    if found_club:
+            embedded = post.get("_embedded") or {}
+            terms_groups = embedded.get("wp:term") or []
+            found_club = None
+            for group in terms_groups:
+                if not isinstance(group, list):
+                    continue
+                for term in group:
+                    term_slug = term.get("slug") or ""
+                    club_id = map_name_to_club_id(term_slug)
+                    if club_id:
+                        found_club = club_id
                         break
+                if found_club:
+                    break
 
-                if found_club and found_club not in recent_club_ids:
-                    recent_club_ids.append(found_club)
+            if found_club and found_club not in recent_club_ids:
+                recent_club_ids.append(found_club)
 
-            logging.info(
-                "WordPress retornou %s posts recentes; clubes recentes detectados: %s",
-                len(posts_out),
-                recent_club_ids,
-            )
-            last_wp_error = None
-            break
-        except Exception as exc:
-            last_wp_error = exc
-            logging.warning(
-                "Falha ao buscar posts recentes no WordPress (tentativa %s/3): %s",
-                attempt,
-                exc,
-            )
-            time.sleep(min(2 * attempt, 6))
-
-    if last_wp_error:
+        logging.info(
+            "WordPress retornou %s posts recentes; clubes recentes detectados: %s",
+            len(posts_out),
+            recent_club_ids,
+        )
+    except Exception as exc:
         raise AirflowFailException(
             "WordPress indisponível para leitura da API. "
-            f"Erro final após retries: {last_wp_error}"
+            f"Erro final após retries: {exc}"
         )
 
     ti.xcom_push(key="recent_posts", value=posts_out)
@@ -584,7 +702,7 @@ def task_select_clubs(**kwargs):
             {
                 "club_id": club_id,
                 "club_name": club_data["name"],
-                "club_page_url": f"{WP_SITE.rstrip('/')}{club_data['page']}",
+                "club_page_url": f"{wp_base_url()}{club_data['page']}",
                 "docs_sorted": grouped.get(club_id, []),
             }
         )
@@ -842,41 +960,23 @@ def task_process_club(index: int, **kwargs):
 
         filename = f"dalle-{club_id}-{int(time.time())}.png"
         media_headers = {
-            "Authorization": WP_AUTH,
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Content-Type": "image/png",
         }
 
-        last_upload_error = None
-        for attempt in range(1, 4):
-            try:
-                upload_response = requests.post(
-                    f"{WP_SITE}/wp-json/wp/v2/media",
-                    headers=media_headers,
-                    data=image_bytes,
-                    timeout=60,
-                )
-                upload_response.raise_for_status()
-
-                media_json = upload_response.json() or {}
-                media_id = media_json.get("id")
-                media_url = media_json.get("source_url") or image_url
-
-                if not media_id:
-                    raise AirflowException("Resposta de upload sem media_id")
-                break
-            except Exception as upload_exc:
-                last_upload_error = upload_exc
-                logging.warning(
-                    "club_id=%s ETAPA_E tentativa %s/3 falhou no upload da mídia: %s",
-                    club_id,
-                    attempt,
-                    upload_exc,
-                )
-                time.sleep(min(2 * attempt, 6))
-
+        upload_response = wp_request(
+            "POST",
+            "/media",
+            headers=media_headers,
+            data=image_bytes,
+            timeout=60,
+            retries=3,
+        )
+        media_json = upload_response.json() or {}
+        media_id = media_json.get("id")
+        media_url = media_json.get("source_url") or image_url
         if not media_id:
-            raise last_upload_error or AirflowException("Upload da mídia sem retorno válido")
+            raise AirflowException("Resposta de upload sem media_id")
     except Exception as exc:
         media_id = None
         media_url = fallback_image_url or image_url
@@ -956,15 +1056,14 @@ def task_process_club(index: int, **kwargs):
         existing_map = {}
         slugs_csv = ",".join([tag["slug"] for tag in tag_candidates])
         try:
-            existing_resp = requests.get(
-                f"{WP_SITE}/wp-json/wp/v2/tags",
-                headers=wp_headers(),
+            existing_resp = wp_request(
+                "GET",
+                "/tags",
                 params={"per_page": 100, "slug": slugs_csv, "_fields": "id,slug,name"},
                 timeout=20,
             )
-            if existing_resp.ok:
-                for item in existing_resp.json() or []:
-                    existing_map[item.get("slug")] = item.get("id")
+            for item in existing_resp.json() or []:
+                existing_map[item.get("slug")] = item.get("id")
         except Exception as exc:
             logging.warning("club_id=%s ETAPA_H falha ao buscar tags existentes: %s", club_id, exc)
 
@@ -1007,39 +1106,19 @@ def task_process_club(index: int, **kwargs):
         if media_id:
             publish_payload["featured_media"] = media_id
 
-        publish_json = {}
-        wp_post_id = None
-        last_publish_error = None
-        for attempt in range(1, 4):
-            try:
-                publish_response = requests.post(
-                    f"{WP_SITE}/wp-json/wp/v2/posts",
-                    headers=wp_headers(),
-                    json=publish_payload,
-                    timeout=30,
-                )
-                publish_response.raise_for_status()
-
-                publish_json = publish_response.json() or {}
-                if publish_json.get("status") != "publish":
-                    raise AirflowException(f"Post não publicado. status={publish_json.get('status')}")
-
-                wp_post_id = publish_json.get("id")
-                if not wp_post_id:
-                    raise AirflowException("Resposta sem id do post")
-                break
-            except Exception as publish_exc:
-                last_publish_error = publish_exc
-                logging.warning(
-                    "club_id=%s ETAPA_I tentativa %s/3 falhou ao publicar post: %s",
-                    club_id,
-                    attempt,
-                    publish_exc,
-                )
-                time.sleep(min(2 * attempt, 6))
-
+        publish_response = wp_request(
+            "POST",
+            "/posts",
+            json_payload=publish_payload,
+            timeout=30,
+            retries=3,
+        )
+        publish_json = publish_response.json() or {}
+        if publish_json.get("status") != "publish":
+            raise AirflowException(f"Post não publicado. status={publish_json.get('status')}")
+        wp_post_id = publish_json.get("id")
         if not wp_post_id:
-            raise last_publish_error or AirflowException("Falha na publicação sem detalhe")
+            raise AirflowException("Resposta sem id do post")
 
         result = {
             "club_id": club_id,
